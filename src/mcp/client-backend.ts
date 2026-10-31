@@ -1,5 +1,6 @@
 import type { ComandBackend } from './tools.js';
 import type { Job, Device, Project, LogChunk } from '../shared/protocol.js';
+import type { Discovery } from '../shared/discovery.js';
 
 /** REST-backed stdio MCP allows private local tools/tunnels without exposing the hub. */
 export function remoteBackend(url: string, token: string): ComandBackend {
@@ -24,6 +25,9 @@ export function remoteBackend(url: string, token: string): ComandBackend {
     return result;
   };
   return {
+    createDiscovery: (input) => request<Discovery>('/api/discoveries', 'POST', input),
+    getDiscovery: (id) => request<Discovery>(`/api/discoveries/${encodeURIComponent(id)}`),
+    openDiscoveredProject: (input) => request<Project>('/api/projects/open', 'POST', input),
     listDevices: () => request<Device[]>('/api/devices'),
     listProjects: () => request<Project[]>('/api/projects'),
     getProject: async (id) => (await request<Project[]>('/api/projects')).find((p) => p.id === id),

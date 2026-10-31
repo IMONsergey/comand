@@ -4,6 +4,12 @@ import { mkdirSync, chmodSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { z } from 'zod';
 import {
+  discoveryInputSchema,
+  discoveryResultSchema,
+  type Discovery,
+  type DiscoveryInput,
+} from '../shared/discovery.js';
+import {
   createJobSchema,
   jobStates,
   MAX_LOG_CHUNK,
@@ -60,6 +66,8 @@ const enrollmentSchema = z
   .strict();
 const heartbeatSchema = z
   .object({
+    projectDiscovery: z.boolean().optional(),
+    roots: z.array(pathSchema).min(1).max(32).optional(),
     version: z
       .string()
       .trim()
@@ -141,6 +149,7 @@ export class HubStore {
    CREATE TABLE IF NOT EXISTS pairing_status(id TEXT PRIMARY KEY,code_hash TEXT UNIQUE NOT NULL,expires_at TEXT NOT NULL,device_id TEXT REFERENCES devices(id));
    CREATE INDEX IF NOT EXISTS pairing_status_expiry ON pairing_status(expires_at);
    CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS discoveries(id TEXT PRIMARY KEY,device_id TEXT NOT NULL,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,device_id TEXT NOT NULL,idempotency_key TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,logs BLOB NOT NULL DEFAULT X'');
    CREATE UNIQUE INDEX IF NOT EXISTS one_active_project ON jobs(project_id) WHERE status IN ('queued','dispatched','running','uncertain');`);
     const boundOwner = this.db
@@ -311,6 +320,130 @@ export class HubStore {
   }
   getProject(id: string): Project | undefined {
     return this.decode<Project>(this.db.prepare('SELECT data FROM projects WHERE id=?').get(id));
+  }
+  createDiscovery(input: DiscoveryInput): Discovery {
+    const value = parse(discoveryInputSchema, input);
+    const device = this.requiredDevice(value.deviceId);
+    if (!device.projectDiscovery)
+      throw new HubError(
+        409,
+        'Обновите агент на устройстве: поиск проектов пока не поддерживается',
+        'agent_update_required',
+      );
+    if (!device.online)
+      throw new HubError(
+        409,
+        'Устройство не в сети. Включите его и повторите поиск',
+        'device_offline',
+      );
+    if (
+      value.path &&
+      (!value.path.startsWith('/') ||
+        !device.roots.some((root) => within(root, posix.normalize(value.path!))))
+    )
+      throw new HubError(400, 'Папка вне разрешённой области поиска', 'invalid_root');
+    this.db
+      .prepare("DELETE FROM discoveries WHERE json_extract(data,'$.expiresAt') < ?")
+      .run(new Date(Date.now() - 86400000).toISOString());
+    const pending = this.db.prepare('SELECT id FROM discoveries WHERE device_id=?').all(device.id);
+    for (const row of pending) {
+      const existing = this.getDiscovery(row.id as string);
+      if (existing.status !== 'queued') continue;
+      if (existing.query === value.query && existing.path === value.path) return existing;
+      throw new HubError(
+        409,
+        'На устройстве уже идёт поиск. Дождитесь его завершения',
+        'discovery_busy',
+      );
+    }
+    if ((this.db.prepare('SELECT count(*) AS n FROM discoveries').get() as { n: number }).n >= 500)
+      throw new HubError(429, 'Слишком много поисков. Повторите позже', 'rate_limited');
+    const discovery: Discovery = {
+      ...value,
+      id: randomUUID(),
+      status: 'queued',
+      createdAt: now(),
+      expiresAt: new Date(Date.now() + 120000).toISOString(),
+    };
+    this.db
+      .prepare('INSERT INTO discoveries VALUES(?,?,?)')
+      .run(discovery.id, device.id, JSON.stringify(discovery));
+    return discovery;
+  }
+  getDiscovery(id: string): Discovery {
+    const discovery = this.decode<Discovery>(
+      this.db.prepare('SELECT data FROM discoveries WHERE id=?').get(id),
+    );
+    if (!discovery) throw new HubError(404, 'Поиск не найден', 'not_found');
+    this.requiredDevice(discovery.deviceId);
+    if (discovery.status === 'queued' && discovery.expiresAt <= now()) {
+      discovery.status = 'expired';
+      discovery.error = 'Устройство не ответило вовремя. Повторите поиск';
+      this.db
+        .prepare('UPDATE discoveries SET data=? WHERE id=?')
+        .run(JSON.stringify(discovery), id);
+    }
+    return discovery;
+  }
+  completeDiscovery(deviceId: string, id: string, input: unknown): Discovery {
+    const device = this.requiredDevice(deviceId);
+    const discovery = this.getDiscovery(id);
+    if (discovery.deviceId !== deviceId)
+      throw new HubError(403, 'Поиск принадлежит другому устройству', 'device_mismatch');
+    if (discovery.status !== 'queued') return discovery;
+    const value = parse(
+      z.union([
+        z.object({ result: discoveryResultSchema }).strict(),
+        z.object({ error: z.string().min(1).max(1000) }).strict(),
+      ]),
+      input,
+    );
+    if ('result' in value) {
+      if (
+        ![
+          ...value.result.roots,
+          ...value.result.candidates.map((candidate) => candidate.root),
+        ].every(
+          (root) =>
+            root.startsWith('/') &&
+            !root.split('/').includes('..') &&
+            device.roots.some((allowed) => within(allowed, root)),
+        )
+      )
+        throw new HubError(400, 'Результат выходит за разрешённые папки', 'invalid_root');
+      discovery.status = 'succeeded';
+      discovery.result = value.result;
+    } else {
+      discovery.status = 'failed';
+      discovery.error = value.error;
+    }
+    discovery.expiresAt = new Date(Date.now() + 600000).toISOString();
+    this.db.prepare('UPDATE discoveries SET data=? WHERE id=?').run(JSON.stringify(discovery), id);
+    return discovery;
+  }
+  openDiscoveredProject(input: { discoveryId: string; root: string }): Project {
+    const value = parse(
+      z.object({ discoveryId: z.string().max(100), root: pathSchema }).strict(),
+      input,
+    );
+    const discovery = this.getDiscovery(value.discoveryId);
+    if (discovery.status !== 'succeeded' || discovery.expiresAt <= now())
+      throw new HubError(409, 'Обновите поиск перед выбором папки', 'stale_discovery');
+    const candidate = discovery.result?.candidates.find((item) => item.root === value.root);
+    if (!candidate)
+      throw new HubError(400, 'Папка отсутствует в результатах поиска', 'invalid_root');
+    if (!this.requiredDevice(discovery.deviceId).roots.some((root) => within(root, candidate.root)))
+      throw new HubError(400, 'Папка больше не разрешена на устройстве', 'invalid_root');
+    return (
+      this.listProjects().find(
+        (project) => project.deviceId === discovery.deviceId && project.root === candidate.root,
+      ) ??
+      this.createProject({
+        deviceId: discovery.deviceId,
+        root: candidate.root,
+        name: candidate.name,
+      })
+    );
   }
   createProject(input: { deviceId: string; name: string; root: string; notes?: string }): Project {
     const value = parse(
@@ -516,6 +649,11 @@ export class HubStore {
       const device = this.requiredDevice(deviceId);
       device.lastSeenAt = now();
       if (value.version !== undefined) device.version = value.version;
+      if (value.projectDiscovery !== undefined) device.projectDiscovery = value.projectDiscovery;
+      if (value.roots !== undefined)
+        device.roots = [
+          ...new Set(value.roots.map((root) => posix.normalize(root).replace(/\/$/, '') || '/')),
+        ];
       this.db.prepare('UPDATE devices SET data=? WHERE id=?').run(JSON.stringify(device), deviceId);
       const jobs = this.db
         .prepare(
@@ -545,6 +683,16 @@ export class HubStore {
         }
       }
       return {
+        ...(value.projectDiscovery
+          ? {
+              discoveries: this.db
+                .prepare('SELECT id FROM discoveries WHERE device_id=?')
+                .all(deviceId)
+                .map((row) => this.getDiscovery(row.id as string))
+                .filter((item) => item.status === 'queued')
+                .slice(0, 1),
+            }
+          : {}),
         jobs: dispatches,
         cancellations: jobs.filter((job) => job.cancelRequestedAt).map((job) => job.id),
         serverTime: now(),

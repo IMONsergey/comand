@@ -1401,3 +1401,38 @@ textarea {
     font-size: 12px;
   }
 }
+
+.project-search-results {
+  margin-block: 24px;
+}
+.project-search-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.project-search-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.project-search-row code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.project-search-row small {
+  color: var(--muted);
+}
+.action-group {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+@media (max-width: 600px) {
+  .project-search-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

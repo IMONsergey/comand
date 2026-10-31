@@ -328,7 +328,7 @@ export function App() {
                       {overview.projects.length
                         ? 'Новая задача'
                         : overview.devices.length
-                          ? 'Создать проект'
+                          ? 'Найти проект'
                           : 'Подключить устройство'}
                     </button>
                   </div>
@@ -370,7 +370,7 @@ export function App() {
                           <strong>Выберите проект</strong>
                           <p>Укажите рабочую папку и сохраните контекст проекта.</p>
                           <span className="onboarding-action">
-                            {overview.projects.length ? 'Открыть проекты' : 'Создать проект'}{' '}
+                            {overview.projects.length ? 'Открыть проекты' : 'Найти проект'}{' '}
                             <ArrowUpRight size={15} />
                           </span>
                         </button>
@@ -480,7 +480,7 @@ export function App() {
                                   {overview.projects.length
                                     ? 'Создать первую задачу'
                                     : overview.devices.length
-                                      ? 'Создать проект'
+                                      ? 'Найти проект'
                                       : 'Подключить устройство'}
                                   <ArrowRight size={16} />
                                 </button>

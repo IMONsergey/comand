@@ -7,6 +7,9 @@ Endpoint: `/mcp`, stateless Streamable HTTP. Private alternative: `node dist/cli
 | list_devices       | comand:read    | Available computers, roots and capabilities |
 | list_projects      | comand:read    | Explicit device/project IDs                 |
 | project_context    | comand:read    | Saved notes and recent job summaries        |
+| find_projects      | comand:read    | Find existing directories on a device, no project needed |
+| get_project_search | comand:read    | Read discovery status, scope and candidates |
+| open_project       | comand:write   | Reuse or register an exact discovered directory |
 | create_project     | comand:write   | Register an existing allowed directory      |
 | save_project_notes | comand:write   | Replace factual project handoff             |
 | list_jobs          | comand:read    | Recent job summaries                        |
@@ -52,3 +55,15 @@ HTTP OAuth grants bind to the account that approved them. New users see only the
 Five additional familiar tools support persistent piped terminal sessions: `start_process`, `interact_with_process`, `read_process_output`, `list_sessions`, `force_terminate`. All take an explicit `projectId`; session operations also take `sessionId`. Mutations require an `idempotencyKey`. All require `comand:execute`, including generic retrieval of their job details/logs. List/overview summaries redact stdin. See [PROCESSES.md](PROCESSES.md) for precise receipts, timeouts, recovery and pipe/PTY limits.
 
 Comand's tested queue and recovery behavior must not be confused with complete Desktop Commander feature equivalence. Native GUI control, signed-in browser control, rich document editors and PTY programs are not provided by these tools.
+
+## Existing projects first (0.3)
+
+The server advertises 25 tools and supplies instructions during MCP initialization. Read `list_devices`, then `list_projects` (optional name/path `query`) and `project_context` before creating anything. If no suitable project is registered, call `find_projects` with `deviceId`, optional literal `query`, and optional absolute `path` within the granted device roots. Poll `get_project_search` with the returned `searchId`. This operation needs no project, shell permission or empty workspace.
+
+Discovery reads directory metadata only. It skips symlinks, hidden directories, dependencies and build outputs; it never reads file contents, runs commands or creates folders. Limits: 4 seconds, depth 4, 2500 directories, 25000 entries, 100 candidates. A partial or denied search is not evidence that the project does not exist. Narrow the observed path when necessary.
+
+Call `open_project` with `discoveryId` and an exact candidate `root`. It returns the existing project for that device/root or registers that same directory. It does not clone, initialize or create files. One discovery may be queued per device; repeating the identical pending request returns its ID. Pending discovery expires after 120 seconds; completed results can be selected for 10 minutes. Read-only discovery can repeat after a lost response; accepted execution jobs retain their existing no-replay contract.
+
+Agents older than 0.3 continue to execute jobs, but discovery reports that an update is needed. Update the hub before the agent. Root changes require a local `agent allow-root` and agent restart; an authenticated heartbeat synchronizes them to the hub. Discovery remains isolated per account and device, with CSRF enforcement for browser mutations.
+
+See [the Desktop Commander review](DESKTOP_COMMANDER_REVIEW.md) for adopted workflow principles and explicit feature gaps.

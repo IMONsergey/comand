@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { ArrowRight, Folder, Monitor, Pencil, Plus } from 'lucide-react';
+import { ArrowRight, Folder, Monitor, Pencil, Plus, Search } from 'lucide-react';
+import { ProjectSearch } from './ProjectSearch';
 import type { Device, Project } from '../../src/shared/protocol';
 import { api } from './api';
 import { Busy, date, DeviceStatus, Empty, ErrorBox, Field, Modal } from './components';
@@ -16,6 +17,8 @@ export function Projects({
   onPair: () => void;
 }) {
   const [editing, setEditing] = useState<Project | 'new' | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [filter, setFilter] = useState('');
   const availableDevices = devices.filter((device) => !device.revokedAt);
   return (
     <>
@@ -28,61 +31,89 @@ export function Projects({
           </h1>
           <p>Рабочая папка, устройство и заметки — точная точка входа для каждой задачи.</p>
         </div>
-        <button
-          className="button button-primary"
-          disabled={!availableDevices.length}
-          onClick={() => setEditing('new')}
-        >
-          <Plus size={18} />
-          Новый проект
-        </button>
+        <div className="action-group">
+          <button
+            className="button button-primary"
+            disabled={!availableDevices.length}
+            onClick={() => setSearching(true)}
+          >
+            <Search size={18} />
+            Найти проект
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={!availableDevices.length}
+            onClick={() => setEditing('new')}
+          >
+            <Plus size={18} />
+            Добавить папку вручную
+          </button>
+        </div>
       </div>
       {projects.length ? (
-        <div className="project-grid">
-          {projects.map((project) => {
-            const device = devices.find((item) => item.id === project.deviceId);
-            return (
-              <article className="panel project-card" key={project.id}>
-                <div className="project-card-heading">
-                  <span className="project-icon">
-                    <Folder size={23} strokeWidth={1.5} />
-                  </span>
-                  <button
-                    className="icon-button"
-                    onClick={() => setEditing(project)}
-                    aria-label={`Редактировать проект ${project.name}`}
-                  >
-                    <Pencil size={17} />
-                  </button>
-                </div>
-                <h2>{project.name}</h2>
-                <code className="project-root">{project.root}</code>
-                <div className="project-device">
-                  <Monitor size={15} />
-                  <span>{device?.name ?? project.deviceId}</span>
-                  {device && <DeviceStatus online={device.online} revoked={!!device.revokedAt} />}
-                </div>
-                <div className="project-notes">
-                  <span className="eyebrow">ЗАМЕТКИ К ПРОЕКТУ</span>
-                  <p>
-                    {project.notes || (
-                      <span className="subdued">
-                        Добавьте контекст: как запускать проект, где искать файлы и что учитывать.
+        <>
+          <Field label="Поиск добавленных проектов">
+            <input
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder="Название или путь"
+            />
+          </Field>
+          <div className="project-grid">
+            {projects
+              .filter((project) =>
+                `${project.name} ${project.root}`
+                  .toLocaleLowerCase()
+                  .includes(filter.toLocaleLowerCase()),
+              )
+              .map((project) => {
+                const device = devices.find((item) => item.id === project.deviceId);
+                return (
+                  <article className="panel project-card" key={project.id}>
+                    <div className="project-card-heading">
+                      <span className="project-icon">
+                        <Folder size={23} strokeWidth={1.5} />
                       </span>
-                    )}
-                  </p>
-                </div>
-                <div className="project-card-footer">
-                  Изменён {date(project.updatedAt)}
-                  <button className="text-button" onClick={() => setEditing(project)}>
-                    Изменить
-                    <ArrowRight size={14} />
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+                      <button
+                        className="icon-button"
+                        onClick={() => setEditing(project)}
+                        aria-label={`Редактировать проект ${project.name}`}
+                      >
+                        <Pencil size={17} />
+                      </button>
+                    </div>
+                    <h2>{project.name}</h2>
+                    <code className="project-root">{project.root}</code>
+                    <div className="project-device">
+                      <Monitor size={15} />
+                      <span>{device?.name ?? project.deviceId}</span>
+                      {device && (
+                        <DeviceStatus online={device.online} revoked={!!device.revokedAt} />
+                      )}
+                    </div>
+                    <div className="project-notes">
+                      <span className="eyebrow">ЗАМЕТКИ К ПРОЕКТУ</span>
+                      <p>
+                        {project.notes || (
+                          <span className="subdued">
+                            Добавьте контекст: как запускать проект, где искать файлы и что
+                            учитывать.
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="project-card-footer">
+                      Изменён {date(project.updatedAt)}
+                      <button className="text-button" onClick={() => setEditing(project)}>
+                        Изменить
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+          </div>
+        </>
       ) : (
         <section className="panel">
           <Empty
@@ -90,10 +121,10 @@ export function Projects({
             action={
               <button
                 className="button button-primary"
-                onClick={() => (availableDevices.length ? setEditing('new') : onPair())}
+                onClick={() => (availableDevices.length ? setSearching(true) : onPair())}
               >
                 <Plus size={17} />
-                {availableDevices.length ? 'Создать проект' : 'Подключить устройство'}
+                {availableDevices.length ? 'Найти существующий проект' : 'Подключить устройство'}
               </button>
             }
           >
@@ -101,6 +132,22 @@ export function Projects({
             сохранить инструкции и рабочий контекст.
           </Empty>
         </section>
+      )}
+      {searching && (
+        <ProjectSearch
+          devices={availableDevices}
+          projects={projects}
+          onClose={() => setSearching(false)}
+          onSaved={async (project) => {
+            setSearching(false);
+            if (project) setFilter(project.root);
+            await onChange();
+          }}
+          onManual={() => {
+            setSearching(false);
+            setEditing('new');
+          }}
+        />
       )}
       {editing && (
         <ProjectForm
@@ -152,7 +199,7 @@ function ProjectForm({
   }
   return (
     <Modal
-      title={project ? 'Настройки проекта' : 'Новый проект'}
+      title={project ? 'Настройки проекта' : 'Добавить папку вручную'}
       subtitle={
         project
           ? 'Название и заметки можно обновить в любое время.'
@@ -225,7 +272,7 @@ function ProjectForm({
             Отмена
           </button>
           <button className="button button-primary" disabled={busy}>
-            {busy ? <Busy>Сохраняем…</Busy> : project ? 'Сохранить изменения' : 'Создать проект'}
+            {busy ? <Busy>Сохраняем…</Busy> : project ? 'Сохранить изменения' : 'Добавить проект'}
           </button>
         </div>
       </form>

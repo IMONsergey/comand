@@ -12,6 +12,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { discoverProjects } from './discovery.js';
 import {
   VERSION,
   MAX_LOG_CHUNK,
@@ -152,6 +153,33 @@ export async function loadConfig(dataDir: string): Promise<AgentConfig> {
   validateHubUrl(config.hubUrl);
   config.dataDir = path.resolve(dataDir);
   return config;
+}
+export async function allowRoot(dataDir: string, root: string): Promise<string[]> {
+  if (!path.isAbsolute(root)) throw Error('Укажите абсолютный путь к существующей папке');
+  const directory = await realpath(root);
+  if (directory.length > 4096 || /[\\\x00-\x1f]/.test(directory))
+    throw Error('Путь содержит неподдерживаемые символы');
+  if (!(await stat(directory)).isDirectory()) throw Error('Нужна существующая папка');
+  const state = await realpath(dataDir);
+  if (
+    directory === path.parse(directory).root ||
+    directory === state ||
+    directory.startsWith(state + path.sep) ||
+    state.startsWith(directory + path.sep)
+  )
+    throw Error('Рабочая папка не должна включать состояние и ключи агента');
+  const lockPath = path.join(state, 'configuration.lock');
+  const lock = await open(lockPath, 'wx', 0o600);
+  try {
+    const config = await loadConfig(state);
+    const roots = [...new Set([...config.roots, directory])];
+    if (roots.length > 32) throw Error('Достигнут предел разрешённых папок');
+    await atomicJson(path.join(state, 'config.json'), { ...config, roots });
+    return roots;
+  } finally {
+    await lock.close();
+    await unlink(lockPath);
+  }
 }
 export async function acceptDispatch(config: AgentConfig, dispatch: Dispatch): Promise<boolean> {
   if (
@@ -375,7 +403,11 @@ export async function syncJobs(config: AgentConfig) {
 }
 export async function pollOnce(config: AgentConfig) {
   await reconcileJobs(config);
-  const response = await request<PollResponse>(config, '/api/agent/poll', { version: VERSION });
+  const response = await request<PollResponse>(config, '/api/agent/poll', {
+    version: VERSION,
+    projectDiscovery: true,
+    roots: config.roots,
+  });
   const errors: Error[] = [];
   for (const id of response.cancellations) await cancelLocalJob(config.dataDir, id).catch(() => {});
   for (const dispatch of response.jobs) {
@@ -412,6 +444,24 @@ export async function pollOnce(config: AgentConfig) {
     await syncJobs(config);
   } catch (e) {
     errors.push(e instanceof Error ? e : Error(String(e)));
+  }
+  for (const discovery of response.discoveries ?? []) {
+    if (discovery.deviceId !== config.deviceId || discovery.status !== 'queued') continue;
+    let outcome;
+    try {
+      outcome = { result: await discoverProjects(discovery, config.roots) };
+    } catch (error) {
+      outcome = {
+        error: (error instanceof Error ? error.message : 'Поиск не выполнен').slice(0, 1000),
+      };
+    }
+    // This bounded metadata-only read may safely repeat after a lost response.
+    // Accepted execution jobs above retain their separate no-replay semantics.
+    await request(
+      config,
+      `/api/agent/discoveries/${encodeURIComponent(discovery.id)}/result`,
+      outcome,
+    );
   }
   if (errors.length) throw new AggregateError(errors, errors.map((e) => e.message).join('; '));
 }

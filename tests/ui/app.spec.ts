@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHub, type HubRuntime } from '../../src/hub/server.js';
@@ -67,7 +67,7 @@ test('login, project, real command, file result, pairing and responsive navigati
   await page.getByRole('button', { name: 'Войти в Comand' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   await page.getByRole('button', { name: 'Проекты', exact: true }).click();
-  await page.getByRole('button', { name: 'Новый проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Добавить папку вручную', exact: true }).click();
   let dialog = page.getByRole('dialog');
   await dialog.getByLabel('Название проекта').fill('Проверка интерфейса');
   await dialog.getByLabel('Папка проекта, абсолютный путь').fill(projectRoot);
@@ -88,7 +88,7 @@ test('login, project, real command, file result, pairing and responsive navigati
       }),
   );
   await expect(dialog.getByLabel('Заметки и инструкции')).toBeFocused();
-  await dialog.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Добавить проект', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Проверка интерфейса' })).toBeVisible();
   await page.getByRole('button', { name: 'Задачи', exact: true }).click();
   await page.getByRole('button', { name: 'Новая задача', exact: true }).click();
@@ -490,4 +490,39 @@ test('one-command pairing keeps its code, supports advanced settings and waits f
     exactController.abort();
     await Promise.all([otherRunner, exactRunner]);
   }
+});
+
+test('find an existing project before registering it, then reuse the same project', async ({
+  page,
+}) => {
+  const existing = join(projectRoot, 'existing-site');
+  await mkdir(existing, { recursive: true });
+  await writeFile(join(existing, 'index.html'), '<title>Existing site</title>');
+  await page.goto(url);
+  await page.getByText('Другой способ входа', { exact: true }).click();
+  await page.getByRole('button', { name: 'Войти по токену владельца' }).click();
+  await page.getByLabel('Токен владельца', { exact: true }).fill(token);
+  await page.getByRole('button', { name: 'Войти в Comand' }).click();
+  await page.getByRole('button', { name: 'Проекты', exact: true }).click();
+  const before = hub.store.listProjects().length;
+  await page.getByRole('button', { name: 'Найти проект', exact: true }).click();
+  let dialog = page.getByRole('dialog', { name: 'Найти проект', exact: true });
+  await dialog.getByLabel('Название или часть пути').fill('existing-site');
+  await dialog.getByRole('button', { name: 'Найти на устройстве' }).click();
+  await expect(dialog.getByRole('region', { name: 'Найденные папки' })).toContainText(existing);
+  expect(hub.store.listProjects().length).toBe(before);
+  await dialog.getByRole('button', { name: 'Выбрать папку', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'existing-site', exact: true })).toBeVisible();
+  const project = hub.store.listProjects().find((item) => item.root === existing)!;
+  expect(project).toBeTruthy();
+  await page.getByRole('button', { name: 'Найти проект', exact: true }).click();
+  dialog = page.getByRole('dialog', { name: 'Найти проект', exact: true });
+  await dialog.getByLabel('Название или часть пути').fill('existing-site');
+  await dialog
+    .getByRole('region', { name: 'Уже добавленные проекты' })
+    .getByRole('button', { name: 'Использовать' })
+    .click();
+  expect(hub.store.listProjects().filter((item) => item.root === existing)).toHaveLength(1);
+  expect(hub.store.listProjects().find((item) => item.root === existing)!.id).toBe(project.id);
+  expect(await readFile(join(existing, 'index.html'), 'utf8')).toBe('<title>Existing site</title>');
 });

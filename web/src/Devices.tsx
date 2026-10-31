@@ -314,13 +314,14 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
                         {shell ? (
                           <>
                             Разрешает команды терминала с правами вашего пользователя и работу с
-                            файлами в <code>{root || '~/Comand'}</code>. Команды терминала не
-                            ограничены этой папкой.
+                            файлами в <code>{root || '~/Projects или ~/Comand'}</code>. Команды
+                            терминала не ограничены этой папкой.
                           </>
                         ) : (
                           <>
-                            Разрешает файловые операции в <code>{root || '~/Comand'}</code>. Команды
-                            терминала выключены.
+                            Разрешает файловые операции в{' '}
+                            <code>{root || '~/Projects или ~/Comand'}</code>. Команды терминала
+                            выключены.
                           </>
                         )}
                         {browser && ' Также разрешает просмотр веб-страниц.'}
@@ -348,7 +349,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
                     <p className="pair-defaults">
                       {name || root
                         ? 'Агент подключится с выбранными настройками и включит автозапуск.'
-                        : 'Имя компьютера определится автоматически. Агент создаст рабочую папку и настроит автозапуск.'}
+                        : 'Имя компьютера определится автоматически. Агент использует папку Projects; если её нет — создаст Comand. Существующие проекты сохраняются.'}
                     </p>
                   </>
                 )}
@@ -405,14 +406,14 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
                 </Field>
                 <Field
                   label="Рабочая папка, абсолютный путь"
-                  hint="По умолчанию создаётся папка Comand в вашей домашней папке."
+                  hint="По умолчанию используется существующая Projects; если её нет — Comand в домашней папке."
                 >
                   <input
                     className="mono"
                     value={root}
                     onChange={(event) => setRoot(event.target.value)}
                     maxLength={4096}
-                    placeholder="~/Comand — по умолчанию"
+                    placeholder="Автоматически: Projects или Comand"
                     aria-invalid={rootError || undefined}
                   />
                 </Field>

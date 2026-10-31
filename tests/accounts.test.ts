@@ -20,6 +20,59 @@ import type {
 } from '../src/shared/protocol.js';
 
 const password = 'a strong unique test password';
+
+test('project discovery is tenant isolated and cookie mutations require CSRF', async (t) => {
+  const f = await fixture(t);
+  const a = await f.register('discovery-a@example.com'),
+    b = await f.register('discovery-b@example.com');
+  const { credentials } = await f.enroll(a);
+  assert.equal(
+    (await f.request('/api/agent/poll', { projectDiscovery: true }, credentials.token)).status,
+    200,
+  );
+  assert.equal(
+    (
+      await f.request('/api/discoveries', { deviceId: credentials.deviceId }, a, 'POST', {
+        'X-Comand-CSRF': '',
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await f.request('/api/discoveries', { deviceId: credentials.deviceId }, b)).status,
+    404,
+  );
+  const response = await f.request('/api/discoveries', { deviceId: credentials.deviceId }, a);
+  assert.equal(response.status, 202);
+  const search = await response.json();
+  assert.equal((await f.request(`/api/discoveries/${search.id}`, undefined, b)).status, 404);
+  assert.equal(
+    (
+      await f.request(
+        `/api/agent/discoveries/${search.id}/result`,
+        {
+          result: {
+            roots: ['/work'],
+            candidates: [{ root: '/work/site', name: 'site', markers: ['package.json'] }],
+            visited: 2,
+            truncated: false,
+            warnings: [],
+          },
+        },
+        credentials.token,
+      )
+    ).status,
+    200,
+  );
+  const input = { discoveryId: search.id, root: '/work/site' };
+  assert.equal((await f.request('/api/projects/open', input, b)).status, 404);
+  assert.equal(
+    (await f.request('/api/projects/open', input, a, 'POST', { 'X-Comand-CSRF': '' })).status,
+    403,
+  );
+  assert.ok((await f.request('/api/projects/open', input, a)).ok);
+  assert.equal((await (await f.request('/api/projects', undefined, b)).json()).length, 0);
+});
 type Login = SessionInfo & { recoveryCode?: string; cookie: string };
 type Json = Record<string, unknown>;
 async function fixture(t: test.TestContext, options: { registrationEnabled?: boolean } = {}) {

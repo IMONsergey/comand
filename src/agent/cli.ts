@@ -4,7 +4,15 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { shellQuote } from '../shared/shell.js';
-import { pairDevice, runAgent, agentStatus, resolveJob, loadConfig, syncJobs } from './index.js';
+import {
+  pairDevice,
+  runAgent,
+  agentStatus,
+  resolveJob,
+  loadConfig,
+  syncJobs,
+  allowRoot,
+} from './index.js';
 export async function agentCli(args = process.argv.slice(2)) {
   const [command, ...rest] = args;
   const values = new Map<string, string[]>();
@@ -45,6 +53,11 @@ export async function agentCli(args = process.argv.slice(2)) {
       console.log(
         'Shell enabled: trusted hub owners can execute commands with this account’s permissions.',
       );
+  } else if (command === 'allow-root') {
+    console.log(JSON.stringify({ roots: await allowRoot(dataDir, required('--root')) }));
+    console.log(
+      'Папка разрешена. Перезапустите службу агента, чтобы применить изменение. Ключ и история сохранены.',
+    );
   } else if (command === 'run') {
     const controller = new AbortController();
     process.once('SIGINT', () => controller.abort());
@@ -64,7 +77,7 @@ export async function agentCli(args = process.argv.slice(2)) {
     await syncJobs(await loadConfig(dataDir));
   } else
     console.log(
-      'Usage: comand-agent pair --url URL --code CODE --name NAME --root PATH [--root PATH] [--allow-shell] [--allow-browser] [--data-dir PATH]\n       comand-agent run|status [--data-dir PATH]\n       comand-agent resolve --job ID --acknowledge [--data-dir PATH]',
+      'Usage: comand-agent pair --url URL --code CODE --name NAME --root PATH [--root PATH] [--allow-shell] [--allow-browser] [--data-dir PATH]\n       comand-agent allow-root --root PATH [--data-dir PATH]\n       comand-agent run|status [--data-dir PATH]\n       comand-agent resolve --job ID --acknowledge [--data-dir PATH]',
     );
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1]))

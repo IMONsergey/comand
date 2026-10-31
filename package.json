@@ -1,6 +1,6 @@
 {
   "name": "comand",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "Your computers, projects and durable jobs — controlled from chat.",
   "type": "module",

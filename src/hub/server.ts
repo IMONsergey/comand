@@ -337,6 +337,15 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
   app.post('/api/agent/poll', requireDevice, (req, res) =>
     res.json((res.locals.deviceStore as HubStore).poll(res.locals.deviceId as string, req.body)),
   );
+  app.post('/api/agent/discoveries/:id/result', requireDevice, (req, res) =>
+    res.json(
+      (res.locals.deviceStore as HubStore).completeDiscovery(
+        res.locals.deviceId as string,
+        req.params.id as string,
+        req.body,
+      ),
+    ),
+  );
   app.post('/api/agent/jobs/:id/update', requireDevice, (req, res) => {
     if (req.body?.jobId && req.body.jobId !== req.params.id)
       throw new HubError(400, 'URL and payload job IDs disagree');
@@ -389,6 +398,15 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
   );
   app.get('/api/projects', auth.requireOwner, (req, res) =>
     res.json(requestStore(req).listProjects()),
+  );
+  app.post('/api/discoveries', auth.requireOwner, (req, res) =>
+    res.status(202).json(requestStore(req).createDiscovery(req.body)),
+  );
+  app.get('/api/discoveries/:id', auth.requireOwner, (req, res) =>
+    res.json(requestStore(req).getDiscovery(req.params.id as string)),
+  );
+  app.post('/api/projects/open', auth.requireOwner, (req, res) =>
+    res.json(requestStore(req).openDiscoveredProject(req.body)),
   );
   app.post('/api/projects', auth.requireOwner, (req, res) =>
     res.status(201).json(requestStore(req).createProject(req.body)),
