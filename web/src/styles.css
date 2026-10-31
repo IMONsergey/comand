@@ -1127,6 +1127,10 @@ select {
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  /* Mobile layout overflow can widen fixed inset geometry beyond the CSS viewport. */
+  width: 100vw;
+  max-width: 100dvw;
+  min-width: 0;
   z-index: 100;
   background: #18201977;
   backdrop-filter: blur(3px);
@@ -1139,6 +1143,7 @@ select {
 .modal {
   width: 510px;
   max-width: 100%;
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
