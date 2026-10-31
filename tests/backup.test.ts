@@ -12,7 +12,7 @@ import importlib.util, tempfile, pathlib, sqlite3, os, json, hashlib, types
 spec=importlib.util.spec_from_file_location('backup','scripts/backup-hub.py')
 m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 with tempfile.TemporaryDirectory() as tmp:
- root=pathlib.Path(tmp); state=root/'state'; state.mkdir()
+ root=pathlib.Path(tmp).resolve(); state=root/'state'; state.mkdir()
  (state/'manifest.json').write_text('metadata from a previous restore')
  for name in ['hub.json','admin.token','oauth.key']: (state/name).write_text('private-fixture')
  for name in ['hub.sqlite','accounts.sqlite','oauth.sqlite','accounts/user/hub.sqlite']:
