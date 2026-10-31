@@ -1,98 +1,61 @@
-# Comand 0.1.0 verification record
+# Проверка Comand 0.2.1
 
-Latest follow-up: executable commit `3a0126474bd56cd7508d8c89cb0a2058ad033c78` is built and installed on both Mac and Linux hubs. Local verification passed all 44 tests. [CI run 41166362540](https://github.com/IMONsergey/comand/actions/runs/41166362540) passed Ubuntu core, macOS core (one Linux-only skip), and all four browser cases. Public DNS/TLS and ChatGPT registration are still pending; the exact deployment checkpoint is in [PUBLIC_DEPLOYMENT.md](PUBLIC_DEPLOYMENT.md). The original release evidence below remains a historical baseline.
+Дата: 31 октября 2026. Проверенный и установленный код: `c7dcd9b974aa582e528a899f24ba45c6e547a53b`. Последующие изменения этого отчёта не меняют исполняемый код.
 
-Date: 2026-10-31. This record documents the completed local release checks and identifies external integrations that were not configured. Runtime observations below were reported by the maintainer operating the real devices; they are separate from the automated test suite. No credentials or device tokens are included.
+## Результаты
 
-## Current release status
+| Проверка | Результат |
+| --- | --- |
+| `npm run verify` | 81/81 тест, обе проверки TypeScript, production build |
+| Финальная проверка типов после исправления фокуса | Пройдена |
+| GitHub CI: Ubuntu и macOS | Оба задания пройдены; включая сборку и аудит зависимостей |
+| GitHub CI: браузер | 8 сценариев Chromium на широком и мобильном экране |
+| Реальный Mac: Chrome и WebKit | 16/16 сценариев, четыре сценария на четырёх конфигурациях; 2,6 минуты |
+| Установка готового архива на Mac | Пройдена через настоящую службу launchd |
+| Установка без Node.js на PATH | Mac: скачан отдельный Node.js 24.22.1, проверена контрольная сумма, агент выполнил команду |
+| Установка готового архива на Linux | Пройдена через настоящую службу systemd user |
+| Рабочий сервер после обновления | 22 MCP-инструмента; реальная команда, повтор с тем же ключом, интерактивный Node и остановка процесса |
+| Публичный HTTPS | Панель 0.2.1, health, регистрация, метаданные OAuth и загрузка установщика доступны |
+| Docker / Compose runtime | Не проверялся запуск контейнера |
+| Конкретное подключение аккаунта ChatGPT | Ещё не пройдено; проверен официальный MCP SDK |
 
-The hub, agent, CLI, web panel and MCP/OAuth implementation are published. The original release baseline passed local type checking, all **40 core/integration tests**, and the production build. Ubuntu and macOS baseline core CI jobs have passed; macOS skips one test that invokes the Linux systemd unit parser.
+[Полный CI для проверенного коммита](https://github.com/IMONsergey/comand/actions/runs/41171676778).
 
-The subsequent public-deployment changes passed a new complete local `npm run verify`: **44/44 tests**, both TypeScript checks and the production build. Four added regressions cover restricted direct-loopback proxy trust, independent client rate limits for login/enrollment and OAuth, and rejection of a persisted refresh token after the provider is reopened with a different resource origin. The original 40-test CI evidence below remains a historical baseline; a new CI result and deployed revision for these changes are not yet recorded.
+На macOS тест парсера Linux systemd пропускается по платформе. Результаты Chrome/WebKit получены на реальном Mac; это не проверка на физическом iPhone. ARM-архитектуры предусмотрены установщиком, но реальные проверки установки выполнены на x64.
 
-Real macOS and Linux installations are running. Each currently has its own independent loopback hub and local paired agent. They do not yet form one shared public control plane. A public HTTPS deployment and an actual ChatGPT account connection are not verified.
+## Что проверяют тесты
 
-**The complete browser suite passed in CI after the explicit mobile viewport CSS fix:** all four desktop/mobile E2E cases passed on `adcb7ea1c9eda1504ebe8e2612ac050deb226ef0`. Ubuntu core, macOS core and browser jobs all succeeded in [CI run 41164324625](https://github.com/IMONsergey/comand/actions/runs/41164324625). The separate real-Mac Chrome run also passed all four E2E cases in 39.9 seconds against the built application; its device-local log is `/tmp/comand-e2e-built-viewport.log`. The maintainer reviewed and saved the final desktop and mobile screenshots.
+Серверные тесты используют реальные SQLite-базы, HTTP-серверы, файловые системы и дочерние процессы. Проверены изоляция аккаунтов, чужие ID, CSRF, восстановление доступа, отзыв сессий/OAuth, перезапуск, PKCE, повторы запросов, потеря подтверждения, блокировки проектов, тайм-ауты, отмена, неопределённые результаты, обход путей и символические ссылки.
 
-## Automated verification
+Процессы проверены настоящими Node/Python REPL: сохранение переменной, точная доставка stdin без повтора, EOF, границы UTF-8, лимиты вывода, остановка потомков, потеря брокера, обрыв при запуске, убийство агента и перезапуск сервера.
 
-| Check                                        | Recorded result                                             | Evidence / boundary                                                                                                                 |
-| -------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Baseline `npm run verify`                    | Passed locally: 40 tests, typecheck and production build    | Original release baseline. Script runs `check`, `test`, then `build`.                                                               |
-| Public-deployment follow-up `npm run verify` | Passed locally: 44/44 tests, typecheck and production build | Four new proxy/resource regressions; new CI and deployed-revision verification are not yet recorded.                                |
-| Ubuntu core CI                               | Passed                                                      | `.github/workflows/ci.yml`, `core` job on `ubuntu-latest`.                                                                          |
-| macOS core CI                                | Passed, one Linux-only skip                                 | The skipped test uses actual `systemd-analyze verify`; see `tests/service.test.ts`. This is not a claim that systemd runs on macOS. |
-| Desktop browser E2E                          | Passed in final CI run                                      | Passed on adcb7ea in CI and the real-Mac Chrome run.                                                                                |
-| Mobile browser E2E                           | Passed in final CI run                                      | Previous timeout resolved; the fixed flow passed in CI and real-Mac Chrome on adcb7ea.                                              |
-| Complete `npm run test:e2e`                  | **Passed: all 4 cases in CI and on Mac**                    | Both cases passed in desktop and mobile projects in CI run 41164324625 and actual Mac Chrome (39.9 s).                              |
-| Dependency audit                             | CI core jobs passed, including their audit step             | Each core job runs `npm audit --audit-level=high`. No assertion that every possible vulnerability class has been audited.           |
-| Docker image / Compose runtime               | Not exercised                                               | Dockerfile, Compose, Caddy and Nginx examples exist; configuration review is not a successful container deployment.                 |
+Новый сценарий подключения проверяет автоматическую выдачу одной команды, дополнительные настройки, восстановление после HTTP 503 без замены кода, ожидание конкретного устройства, отказ считать постороннее устройство успешным подключением и ожидание первого контакта агента. Проверены Tab/Escape, мобильная форма и снимки экранов.
 
-The core suite uses real SQLite databases, loopback HTTP servers, temporary directories and child processes. It covers owner/device authentication, CSRF, idempotency conflicts, cross-device isolation, durable dispatch and cancellation, project overlap locks, file traversal and symlink rejection, conditional writes, command timeout/cancellation, uncertain recovery, log byte cursors and UTF-8 boundaries. Regression coverage also includes a lost log acknowledgment followed by a grown overlapping upload, CLI symlink invocation, persisted public configuration and private service diagnostics. MCP/OAuth tests use the official MCP client and exercise consent, PKCE, client/resource/scope binding, refresh rotation and replay rejection. See `tests/*.test.ts` for the individual behaviors.
+Установщик проверен с пробелами, кавычками и подстановками в путях, неверной контрольной суммой, повреждённым архивом, отказом службы, повторной установкой и сохранением ключей. Минимальная команда получает имя ОС и создаёт только `~/Comand`; пользовательские пути не создаются автоматически. Тесты проверяют приватные права и защиту от ссылки на домашнюю папку.
 
-The browser suite is defined in `tests/ui/app.spec.ts` and `playwright.config.ts`. It exercises the real login/project/job/file/pairing/navigation flow and an isolated browser inspection that returns a JPEG. Passing lower-level browser or MCP tests does not replace the responsive UI flow.
+## Проверка настоящих служб
 
-## Real-device checks
+`node scripts/native-smoke.mjs --release-dir /absolute/releases` создаёт временный сервер и устанавливает упакованный агент отдельной службой. Проверяются первый контакт, совпадение PID с менеджером служб, команда `printf`, точный вывод и код завершения. Затем удаляются только проверочная служба и её временные данные. Ключи не выводятся.
 
-### macOS
-
-The maintainer installed a hub and paired agent as user launchd services. Both built executables were updated to `adcb7ea1c9eda1504ebe8e2612ac050deb226ef0` and restarted. At the final check, `world.imon.comand.hub.def56a6a` was running with PID `23678`, and `world.imon.comand.agent.17849ca5` was running with PID `23688`; both had last exit code `0`. The local hub address is `http://127.0.0.1:4310`. The following live checks passed:
-
-- A real command continued while both hub and agent services restarted during its four-second execution.
-- The command executed once; submitting its idempotency key again preserved the existing job rather than creating another execution.
-- Full UTF-8/Cyrillic logs were recovered after the restarts.
-- The official MCP client discovered 17 tools and completed an actual file read.
-- Isolated browser inspection returned an actual JPEG screenshot.
-
-These checks demonstrate local service execution and the tested recovery path. The browser was an isolated automation profile, not the owner's personal browser session. They do not establish a ChatGPT account connection or public HTTPS reachability.
-
-### Linux host
-
-The maintainer installed the repository and built it under `$HOME/Projects/comand`. A hub and paired agent are installed as systemd user services and both are running. User lingering is enabled (`Linger=yes`). The user bus is available using `XDG_RUNTIME_DIR=/run/user/1000` and `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`.
-
-The live restart check passed. Both services restarted while a four-second command ran; the job succeeded and the execution marker appeared exactly once. Reusing its idempotency key returned the same job. Both UTF-8 log segments were recovered (62 bytes in total). An official MCP client discovered 17 tools and completed an actual file read. The device-local evidence log is `/tmp/comand-linux-live-verification.log`.
-
-The live recovery proof was collected on revision `9d995b1`. Both installed executables were subsequently rebuilt from `adcb7ea1c9eda1504ebe8e2612ac050deb226ef0` and restarted. At the final check, `comand-hub-a2bafb55.service` was running with PID `106644`, and `comand-agent-47ee7d85.service` was running with PID `106663`; both had last exit code `0` and restart count `0`. The local hub address is `http://127.0.0.1:4310`.
-
-The tested executable revision on both computers is `adcb7ea1c9eda1504ebe8e2612ac050deb226ef0`. Later publication of these verification notes is a documentation-only change; it does not identify a different tested executable. PIDs and lifecycle values above are observations at verification time.
-
-## External integration boundaries
-
-| Integration                                  | Status                     | Remaining work                                                                                                                                                                     |
-| -------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local loopback hub and local agent           | Running on macOS and Linux | Both rebuilt/restarted from adcb7ea; real restart recovery passed on both platforms.                                                                                               |
-| One shared public hub serving both computers | Not deployed               | `comand.imon.world` selected; DNS/TLS, hub public URL and explicit Mac pairing remain. See [PUBLIC_DEPLOYMENT.md](PUBLIC_DEPLOYMENT.md).                                           |
-| Public HTTPS endpoint                        | Preparation in progress    | Administrative SSH access confirmed. Separate HTTP ACME bootstrap installed and locally checked; A record and TLS certificate are not yet confirmed. REG.RU page access timed out. |
-| ChatGPT account registration                 | Not performed              | Register the reachable MCP endpoint in the target account, complete OAuth and verify actual tool use there. Account/workspace eligibility is separate from server implementation.  |
-| Private stdio MCP bridge                     | Implemented                | A working MCP server/client check does not establish any particular client's tunnel or account configuration.                                                                      |
-| Docker runtime deployment                    | Not verified               | Build and run the image/Compose setup in a suitable authorized environment before claiming container readiness.                                                                    |
-
-OAuth consent and token exchange were tested with an MCP client in the authored suite. These protocol checks do not assert that ChatGPT has accepted or registered this server. Native desktop control, a Figma editor and an upstream Desktop Commander adapter are outside this release's implemented scope.
-
-## Original release handoff checklist
-
-- [x] Record the tested source SHA and deployed executable revision on each device: adcb7ea1c9eda1504ebe8e2612ac050deb226ef0.
-- [x] Record final launchd/systemd service names and sanitized running states above.
-- [x] Confirm the Linux live restart result: passed, with device-local evidence recorded above.
-- [x] Confirm the final desktop/mobile E2E result after the mobile viewport fix: all four cases passed in CI run 41164324625 on adcb7ea.
-- [x] Record the separate real-Mac Chrome run: all four E2E cases passed in 39.9 seconds, `/tmp/comand-e2e-built-viewport.log`.
-- [x] Review and save the final [desktop](images/comand-desktop.png) and [mobile](images/comand-mobile.png) screenshots.
-- [x] Record public HTTPS, ChatGPT registration and Docker runtime limitations explicitly.
-
-## Reproducing checks
-
-From a checkout with Node.js 24+:
+На Mac дополнительно выполнено:
 
 ```bash
-npm ci
-npm run verify
-npm audit --audit-level=high
-npx playwright install chromium
-npm run test:e2e
+node scripts/native-smoke.mjs --release-dir /absolute/releases --bootstrap-node
 ```
 
-On a machine using an installed Google Chrome, the browser command is `COMAND_E2E_CHANNEL=chrome npm run test:e2e`. CI installs Chromium and its OS dependencies in its own runner. This is not an instruction to modify a deployed machine's system packages without authorization.
+Установщик получил PATH без Node.js. Подтверждены приватный скачанный runtime 24.22.1, агент 0.2.1, запуск launchd, выполнение команды и полная очистка. Продолжительность — 38,4 секунды. Linux-проверка финального архива заняла 6,8 секунды.
 
-CI run [41164324625](https://github.com/IMONsergey/comand/actions/runs/41164324625) completed successfully on `adcb7ea1c9eda1504ebe8e2612ac050deb226ef0`, including all four browser cases. The browser workflow uploads `playwright-report` and `test-results` as `browser-report`; failure traces and screenshots are retained. The UI flow writes `overview.png` under its actual Playwright test output directory. The reviewed release images are [comand-desktop.png](images/comand-desktop.png) and [comand-mobile.png](images/comand-mobile.png). The desktop image shows the real Mac instance with four completed tasks. The mobile image shows the real 390-pixel E2E fixture; its overview capture contains one queued and one completed task, a valid snapshot before the next status refresh. Fixture data should not be interpreted as the personal Mac task state.
+Для повторения браузерной проверки с установленным Google Chrome:
 
-Use only sanitized lifecycle diagnostics when recording service status. The service CLI now restricts output; raw launchd output, inherited environments and journal contents can contain unrelated credentials. See [OPERATIONS.md](OPERATIONS.md) for operational recovery and [MCP.md](MCP.md) for the protocol contract.
+```bash
+npm run build
+COMAND_E2E_CHANNEL=chrome COMAND_BROWSER_CHANNEL=chrome COMAND_E2E_WEBKIT=1 npm run test:e2e
+```
+
+WebKit должен быть предварительно установлен через Playwright. Обычный CI запускает Chromium; дополнительная проверка WebKit записана выше отдельно.
+
+## Границы результата
+
+Проверки подтверждают перечисленные сценарии, а не отсутствие любых ошибок или превосходство над Desktop Commander. Пока нет полного PTY, Windows-установщика, управления нативными окнами и отправки писем для восстановления. Терминал работает с правами пользователя ОС, без системной песочницы. Длительный нагрузочный тест и внешняя независимая проверка безопасности не проводились.
+
+Состояние рабочего развёртывания и откат: [PUBLIC_DEPLOYMENT.md](PUBLIC_DEPLOYMENT.md).
