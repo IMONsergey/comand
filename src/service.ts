@@ -60,7 +60,7 @@ export function serviceDefinition(
   }
   if (platform !== 'linux') throw Error('Automatic service installation supports macOS and Linux');
   const name = `comand-${kind}-${id}.service`;
-  const content = `[Unit]\nDescription=Comand ${kind}\nAfter=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=${unitQuote(resolve(built, '..'))}\nExecStart=${args.map(unitQuote).join(' ')}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=20\nKillMode=${kind === 'agent' ? 'process' : 'mixed'}\nUMask=0077\n${unitEnvironment}\n\n[Install]\nWantedBy=default.target\n`;
+  const content = `[Unit]\nDescription=Comand ${kind}\nAfter=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=${resolve(built, '..').replace(/%/g, '%%')}\nExecStart=${args.map(unitQuote).join(' ')}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=20\nKillMode=${kind === 'agent' ? 'process' : 'mixed'}\nUMask=0077\n${unitEnvironment}\n\n[Install]\nWantedBy=default.target\n`;
   return { label: name, path: join(homedir(), '.config', 'systemd', 'user', name), content };
 }
 

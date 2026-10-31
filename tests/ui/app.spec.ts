@@ -106,20 +106,75 @@ test('login, project, real command, file result, pairing and responsive navigati
   dialog = page.getByRole('dialog');
   await dialog.getByLabel('Операция', { exact: true }).selectOption('files.read');
   await dialog.getByLabel('Путь относительно проекта').fill('ui-result.txt');
+  let loggedModalGeometry = false;
   await expect
     .poll(
-      async () =>
-        dialog.evaluate((element) => {
+      async () => {
+        const state = await dialog.evaluate((element) => {
           const rect = element.getBoundingClientRect();
           const viewport = window.visualViewport;
           const left = viewport?.offsetLeft ?? 0;
           const width = viewport?.width ?? window.innerWidth;
+          const backdrop = element.closest<HTMLElement>('.modal-backdrop');
+          const input = element.querySelector('input');
+          const styles = getComputedStyle(element);
           return {
-            insideViewport: rect.left >= left - 2 && rect.right <= left + width + 2,
-            hasHorizontalOverflow: element.scrollWidth > element.clientWidth + 2,
-            scale: viewport?.scale ?? 1,
+            checks: {
+              insideViewport: rect.left >= left - 2 && rect.right <= left + width + 2,
+              hasHorizontalOverflow: element.scrollWidth > element.clientWidth + 2,
+              scale: viewport?.scale ?? 1,
+            },
+            geometry: {
+              modalRect: rect.toJSON(),
+              modalClientWidth: element.clientWidth,
+              modalScrollWidth: element.scrollWidth,
+              modalStyles: {
+                width: styles.width,
+                minWidth: styles.minWidth,
+                maxWidth: styles.maxWidth,
+                position: styles.position,
+              },
+              backdropRect: backdrop?.getBoundingClientRect().toJSON(),
+              backdropScrollLeft: backdrop?.scrollLeft,
+              backdropScrollWidth: backdrop?.scrollWidth,
+              backdropClientWidth: backdrop?.clientWidth,
+              innerWidth: window.innerWidth,
+              scrollX: window.scrollX,
+              documentClientWidth: document.documentElement.clientWidth,
+              documentScrollWidth: document.documentElement.scrollWidth,
+              bodyClientWidth: document.body.clientWidth,
+              bodyScrollWidth: document.body.scrollWidth,
+              visualViewport: viewport
+                ? {
+                    width: viewport.width,
+                    offsetLeft: viewport.offsetLeft,
+                    pageLeft: viewport.pageLeft,
+                    scale: viewport.scale,
+                  }
+                : null,
+              inputRect: input?.getBoundingClientRect().toJSON(),
+              activeElement: document.activeElement?.tagName,
+              activeElementRect: document.activeElement?.getBoundingClientRect().toJSON(),
+              tableRect: document.querySelector('.table-scroll')?.getBoundingClientRect().toJSON(),
+              tableScrollWidth: document.querySelector('.table-scroll')?.scrollWidth,
+            },
           };
-        }),
+        });
+        if (
+          !loggedModalGeometry &&
+          (!state.checks.insideViewport ||
+            state.checks.hasHorizontalOverflow ||
+            state.checks.scale !== 1)
+        ) {
+          loggedModalGeometry = true;
+          console.log('COMAND_MOBILE_MODAL_GEOMETRY', JSON.stringify(state.geometry));
+          await testInfo.attach('mobile-modal-geometry', {
+            body: JSON.stringify(state.geometry, null, 2),
+            contentType: 'application/json',
+          });
+        }
+        return state.checks;
+      },
       { message: 'Focused task form stays inside the visual viewport without automatic zoom' },
     )
     .toEqual({

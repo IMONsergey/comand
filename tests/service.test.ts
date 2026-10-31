@@ -4,6 +4,25 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { serviceDefinition } from '../src/service.js';
+
+test(
+  'Linux service definition is accepted by the actual systemd unit parser',
+  { skip: process.platform !== 'linux' },
+  async (t) => {
+    const dir = await mkdtemp(join(tmpdir(), 'comand-systemd-'));
+    t.after(() => rm(dir, { recursive: true, force: true }));
+    const definition = serviceDefinition('hub', join(dir, 'state with spaces'), 'linux');
+    const file = join(dir, 'comand-verify.service');
+    await writeFile(file, definition.content);
+    const checked = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
+    if (checked.error && (checked.error as NodeJS.ErrnoException).code === 'ENOENT') {
+      t.skip('systemd-analyze is unavailable on this host');
+      return;
+    }
+    assert.equal(checked.status, 0, checked.stderr);
+  },
+);
 
 test('service status shows lifecycle information without inherited environment or journal data', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'comand-service-status-'));
