@@ -13,3 +13,4 @@ test-results/
 .worktrees/
 .DS_Store
 releases/
+__pycache__/

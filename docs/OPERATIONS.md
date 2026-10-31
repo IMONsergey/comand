@@ -107,3 +107,29 @@ Ordinary registration always creates an empty isolated account. To add email/pas
 ## Distribution publication
 
 Build into a new staging directory, then publish the complete `releases` directory while the hub is stopped or with an atomic directory switch. Do not replace a live archive and checksum one at a time: a client could observe different releases. Installer rejects a checksum mismatch and keeps the prior installation. The committed builder packages only production dependencies and built application files; runtime state stays outside the archive.
+
+## Проверяемые резервные копии
+
+Для Linux с systemd user добавлены отдельные утилиты. Нужен Python 3.9+ и собранный проект (`npm run build`). Они не меняют ключи, устройства или данные исходной рабочей среды.
+
+```bash
+node scripts/backup-check.mjs \
+  --state "$HOME/.comand/hub" \
+  --destination "$HOME/.comand/verified-backups" \
+  --service comand-hub-HASH.service
+```
+
+Подставьте имя установленной службы hub. Утилита проверяет соответствие имени папке состояния, ненадолго останавливает только hub, копирует все аккаунты и OAuth, затем возобновляет службу даже при ошибке копирования. Принятые задачи на устройствах продолжаются; панель и новые запросы на время копирования недоступны. Другая одновременно запущенная копия не допускается.
+
+Снимок сначала создаётся во временной папке. Копии SQLite приводятся к состоянию без WAL, проверяются целостность, обязательные ключи и SHA-256 каждого файла. Только после проверки и синхронизации с диском снимок публикуется под окончательным именем. Следующий шаг запускает из его временной копии изолированный hub на случайном loopback-порту, открывает все аккаунты и OAuth. К рабочим агентам этот проверочный hub не подключается; после проверки удаляется только временная копия.
+
+Проверить готовую копию отдельно:
+
+```bash
+python3 scripts/backup-hub.py --verify /absolute/snapshot
+node scripts/restore-drill.mjs /absolute/snapshot
+```
+
+`--offline` допустим только для уже остановленного hub. Это явное подтверждение оператора, а не способ копировать работающий сервер. Папка назначения должна принадлежать текущему пользователю и иметь права 0700. Ссылки и специальные файлы отклоняются. Снимки содержат секреты; не загружайте их в публичный Git или открытое облачное хранилище.
+
+Это резервирование сервера, не состояния агентов. Копии не удаляются автоматически: контролируйте свободное место и архивируйте проверенные старые снимки отдельно. Локальная копия не защищает от потери диска или всего сервера; внешнее зашифрованное резервирование требует отдельного хранилища.

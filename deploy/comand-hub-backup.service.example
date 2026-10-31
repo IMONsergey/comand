@@ -1,0 +1,12 @@
+[Unit]
+Description=Comand verified hub backup and isolated restore drill
+
+[Service]
+Type=oneshot
+UMask=0077
+# Replace NODE, CHECKOUT and HASH with the actual installation paths/label.
+ExecStart=NODE CHECKOUT/scripts/backup-check.mjs --state %h/.comand/hub --destination %h/.comand/verified-backups --service comand-hub-HASH.service
+# Allow the backup's finally block to restart the hub before this task is stopped.
+TimeoutStartSec=infinity
+# Also recover the running production hub if the backup process is killed.
+ExecStopPost=/usr/bin/systemctl --user start comand-hub-HASH.service
