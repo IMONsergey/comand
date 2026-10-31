@@ -4,7 +4,9 @@ Date: 2026-10-31. This record documents the completed local release checks and i
 
 ## Current release status
 
-The hub, agent, CLI, web panel and MCP/OAuth implementation are published. The current local `npm run verify` passes type checking, all **40 core/integration tests**, and the production build. Ubuntu and macOS core CI jobs have passed; macOS skips one test that invokes the Linux systemd unit parser.
+The hub, agent, CLI, web panel and MCP/OAuth implementation are published. The original release baseline passed local type checking, all **40 core/integration tests**, and the production build. Ubuntu and macOS baseline core CI jobs have passed; macOS skips one test that invokes the Linux systemd unit parser.
+
+The subsequent public-deployment changes passed a new complete local `npm run verify`: **44/44 tests**, both TypeScript checks and the production build. Four added regressions cover restricted direct-loopback proxy trust, independent client rate limits for login/enrollment and OAuth, and rejection of a persisted refresh token after the provider is reopened with a different resource origin. The original 40-test CI evidence below remains a historical baseline; a new CI result and deployed revision for these changes are not yet recorded.
 
 Real macOS and Linux installations are running. Each currently has its own independent loopback hub and local paired agent. They do not yet form one shared public control plane. A public HTTPS deployment and an actual ChatGPT account connection are not verified.
 
@@ -12,16 +14,17 @@ Real macOS and Linux installations are running. Each currently has its own indep
 
 ## Automated verification
 
-| Check                          | Recorded result                                          | Evidence / boundary                                                                                                                 |
-| ------------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run verify`               | Passed locally: 40 tests, typecheck and production build | Maintainer's latest complete local run. Script runs `check`, `test`, then `build`.                                                  |
-| Ubuntu core CI                 | Passed                                                   | `.github/workflows/ci.yml`, `core` job on `ubuntu-latest`.                                                                          |
-| macOS core CI                  | Passed, one Linux-only skip                              | The skipped test uses actual `systemd-analyze verify`; see `tests/service.test.ts`. This is not a claim that systemd runs on macOS. |
-| Desktop browser E2E            | Passed in final CI run                                   | Passed on adcb7ea in CI and the real-Mac Chrome run.                                                                                |
-| Mobile browser E2E             | Passed in final CI run                                   | Previous timeout resolved; the fixed flow passed in CI and real-Mac Chrome on adcb7ea.                                              |
-| Complete `npm run test:e2e`    | **Passed: all 4 cases in CI and on Mac**                 | Both cases passed in desktop and mobile projects in CI run 41164324625 and actual Mac Chrome (39.9 s).                              |
-| Dependency audit               | CI core jobs passed, including their audit step          | Each core job runs `npm audit --audit-level=high`. No assertion that every possible vulnerability class has been audited.           |
-| Docker image / Compose runtime | Not exercised                                            | Dockerfile, Compose, Caddy and Nginx examples exist; configuration review is not a successful container deployment.                 |
+| Check                                        | Recorded result                                             | Evidence / boundary                                                                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Baseline `npm run verify`                    | Passed locally: 40 tests, typecheck and production build    | Original release baseline. Script runs `check`, `test`, then `build`.                                                               |
+| Public-deployment follow-up `npm run verify` | Passed locally: 44/44 tests, typecheck and production build | Four new proxy/resource regressions; new CI and deployed-revision verification are not yet recorded.                                |
+| Ubuntu core CI                               | Passed                                                      | `.github/workflows/ci.yml`, `core` job on `ubuntu-latest`.                                                                          |
+| macOS core CI                                | Passed, one Linux-only skip                                 | The skipped test uses actual `systemd-analyze verify`; see `tests/service.test.ts`. This is not a claim that systemd runs on macOS. |
+| Desktop browser E2E                          | Passed in final CI run                                      | Passed on adcb7ea in CI and the real-Mac Chrome run.                                                                                |
+| Mobile browser E2E                           | Passed in final CI run                                      | Previous timeout resolved; the fixed flow passed in CI and real-Mac Chrome on adcb7ea.                                              |
+| Complete `npm run test:e2e`                  | **Passed: all 4 cases in CI and on Mac**                    | Both cases passed in desktop and mobile projects in CI run 41164324625 and actual Mac Chrome (39.9 s).                              |
+| Dependency audit                             | CI core jobs passed, including their audit step             | Each core job runs `npm audit --audit-level=high`. No assertion that every possible vulnerability class has been audited.           |
+| Docker image / Compose runtime               | Not exercised                                               | Dockerfile, Compose, Caddy and Nginx examples exist; configuration review is not a successful container deployment.                 |
 
 The core suite uses real SQLite databases, loopback HTTP servers, temporary directories and child processes. It covers owner/device authentication, CSRF, idempotency conflicts, cross-device isolation, durable dispatch and cancellation, project overlap locks, file traversal and symlink rejection, conditional writes, command timeout/cancellation, uncertain recovery, log byte cursors and UTF-8 boundaries. Regression coverage also includes a lost log acknowledgment followed by a grown overlapping upload, CLI symlink invocation, persisted public configuration and private service diagnostics. MCP/OAuth tests use the official MCP client and exercise consent, PKCE, client/resource/scope binding, refresh rotation and replay rejection. See `tests/*.test.ts` for the individual behaviors.
 
@@ -53,18 +56,18 @@ The tested executable revision on both computers is `adcb7ea1c9eda1504ebe8e2612a
 
 ## External integration boundaries
 
-| Integration                                  | Status                      | Remaining work                                                                                                                                                                    |
-| -------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local loopback hub and local agent           | Running on macOS and Linux  | Both rebuilt/restarted from adcb7ea; real restart recovery passed on both platforms.                                                                                              |
-| One shared public hub serving both computers | Not deployed                | Select a public hostname, configure DNS and TLS/reverse proxy with authorized administration access, then explicitly pair devices to that hub.                                    |
-| Public HTTPS endpoint                        | Unavailable in this session | No configured public domain/DNS or authorized root proxy access was available. Existing sites, DNS and proxy configuration were not changed.                                      |
-| ChatGPT account registration                 | Not performed               | Register the reachable MCP endpoint in the target account, complete OAuth and verify actual tool use there. Account/workspace eligibility is separate from server implementation. |
-| Private stdio MCP bridge                     | Implemented                 | A working MCP server/client check does not establish any particular client's tunnel or account configuration.                                                                     |
-| Docker runtime deployment                    | Not verified                | Build and run the image/Compose setup in a suitable authorized environment before claiming container readiness.                                                                   |
+| Integration                                  | Status                     | Remaining work                                                                                                                                                                     |
+| -------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local loopback hub and local agent           | Running on macOS and Linux | Both rebuilt/restarted from adcb7ea; real restart recovery passed on both platforms.                                                                                               |
+| One shared public hub serving both computers | Not deployed               | `comand.imon.world` selected; DNS/TLS, hub public URL and explicit Mac pairing remain. See [PUBLIC_DEPLOYMENT.md](PUBLIC_DEPLOYMENT.md).                                           |
+| Public HTTPS endpoint                        | Preparation in progress    | Administrative SSH access confirmed. Separate HTTP ACME bootstrap installed and locally checked; A record and TLS certificate are not yet confirmed. REG.RU page access timed out. |
+| ChatGPT account registration                 | Not performed              | Register the reachable MCP endpoint in the target account, complete OAuth and verify actual tool use there. Account/workspace eligibility is separate from server implementation.  |
+| Private stdio MCP bridge                     | Implemented                | A working MCP server/client check does not establish any particular client's tunnel or account configuration.                                                                      |
+| Docker runtime deployment                    | Not verified               | Build and run the image/Compose setup in a suitable authorized environment before claiming container readiness.                                                                    |
 
 OAuth consent and token exchange were tested with an MCP client in the authored suite. These protocol checks do not assert that ChatGPT has accepted or registered this server. Native desktop control, a Figma editor and an upstream Desktop Commander adapter are outside this release's implemented scope.
 
-## Final handoff checklist
+## Original release handoff checklist
 
 - [x] Record the tested source SHA and deployed executable revision on each device: adcb7ea1c9eda1504ebe8e2612ac050deb226ef0.
 - [x] Record final launchd/systemd service names and sanitized running states above.

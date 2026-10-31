@@ -67,6 +67,13 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
   const secure = publicUrl?.protocol === 'https:';
   const app = express();
   app.disable('x-powered-by');
+  // A local reverse proxy must overwrite X-Forwarded-For with its actual peer.
+  // Trust only that direct hop, never public peers or an arbitrary forwarded chain.
+  app.set(
+    'trust proxy',
+    (address: string, hop: number) =>
+      hop === 0 && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address),
+  );
   const store = new HubStore(options.dataDir, options.adminToken);
   const sessions = new Map<string, Session>();
   let server: Server | undefined;
@@ -157,7 +164,7 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
     }
   >();
   const rateLimit: RequestHandler = (req, res, next) => {
-    const key = req.socket.remoteAddress ?? 'local';
+    const key = req.ip ?? req.socket.remoteAddress ?? 'local';
     const existing = attempts.get(key);
     const record =
       existing && existing.reset > Date.now() ? existing : { count: 0, reset: Date.now() + 60000 };

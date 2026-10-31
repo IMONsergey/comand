@@ -144,6 +144,48 @@ test('refresh cannot gain scopes or change audience', async (t) => {
   assert.deepEqual((await provider.verifyAccessToken(second.access_token)).scopes, ['comand:read']);
 });
 
+test('changing the configured origin cannot migrate a persisted refresh token to a new resource', async (t) => {
+  const { provider, client, verifier, code, dir } = await fixture(t);
+  const original = await provider.exchangeAuthorizationCode(
+    client,
+    code,
+    verifier,
+    client.redirect_uris[0],
+    resource,
+  );
+  provider.close();
+
+  const newResource = new URL('https://comand.example/mcp');
+  const moved = new OAuthProvider(dir, newResource);
+  try {
+    assert.ok(await moved.clientsStore.getClient(client.client_id));
+    await assert.rejects(
+      moved.exchangeRefreshToken(client, original.refresh_token!, undefined, newResource),
+      /Invalid refresh token/,
+    );
+  } finally {
+    moved.close();
+  }
+
+  // A rejected exchange under the wrong origin must not consume a valid original grant.
+  const restored = new OAuthProvider(dir, resource);
+  try {
+    const refreshed = await restored.exchangeRefreshToken(
+      client,
+      original.refresh_token!,
+      undefined,
+      resource,
+    );
+    assert.notEqual(refreshed.refresh_token, original.refresh_token);
+    assert.equal(
+      (await restored.verifyAccessToken(refreshed.access_token)).resource?.href,
+      resource.href,
+    );
+  } finally {
+    restored.close();
+  }
+});
+
 test('client redirects, unexpected scopes and unknown resource are rejected before consent', async (t) => {
   const { provider, client } = await fixture(t);
   await assert.rejects(

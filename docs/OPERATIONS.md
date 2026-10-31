@@ -60,6 +60,18 @@ The same environment applies to `install` and `restart` and to `--kind agent`. I
 
 Keep a directly running hub on `127.0.0.1` and expose it through your existing Nginx/Caddy. Set `--public-url` to the exact HTTPS origin. If listening on a non-loopback address (such as inside Docker), an explicit HTTPS public URL is mandatory. Configure the reverse proxy to preserve the public Host header and allow request bodies of at least 5 MiB. Do not cache API, OAuth or MCP responses.
 
+The application trusts client-IP forwarding only from the **direct** loopback proxy: `127.0.0.1`, `::1` or `::ffff:127.0.0.1`, at hop zero. Public peers, other private addresses and further forwarded hops are not trusted. Login, device enrollment, OAuth consent and the SDK's OAuth limits therefore distinguish real clients behind this local proxy instead of sharing one loopback-IP quota.
+
+The proxy must overwrite incoming client-supplied forwarding data. For a directly exposed host-local Nginx, use:
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Proto https;
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+Do not enable unrestricted Express `trust proxy` or pass an arbitrary client-provided IP as authoritative. A proxy connecting from a Docker bridge or another non-loopback address is intentionally outside this trust rule; its forwarding and rate-limit behavior need a separately reviewed topology before public deployment. The current concrete host-local rollout is recorded in [PUBLIC_DEPLOYMENT.md](PUBLIC_DEPLOYMENT.md), with its target [Nginx virtual host](../deploy/comand.imon.world.conf).
+
 Persist deployment settings before installing or restarting a hub service:
 
 ```bash

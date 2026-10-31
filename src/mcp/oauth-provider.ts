@@ -371,7 +371,8 @@ export class OAuthProvider implements OAuthServerProvider {
     const row = this.db
       .prepare('SELECT * FROM oauth_tokens WHERE hash=? AND kind=? AND client_id=?')
       .get(hash(token), 'refresh', client.client_id) as TokenRecord | undefined;
-    if (!row || row.expires <= now()) throw new InvalidGrantError('Invalid refresh token');
+    if (!row || row.expires <= now() || row.resource !== this.resource.href)
+      throw new InvalidGrantError('Invalid refresh token');
     if (row.used) {
       this.revokeGrant(row.grant_id);
       throw new InvalidGrantError('Refresh token replay; connection revoked');

@@ -84,7 +84,7 @@ export function installMcp(hub: HubRuntime, options: { dataDir: string; publicUr
   });
   const consentAttempts = new Map<string, { count: number; until: number }>();
   app.post('/oauth/consent', express.urlencoded({ extended: false, limit: '4kb' }), (req, res) => {
-    const peer = req.socket.remoteAddress ?? 'unknown';
+    const peer = req.ip ?? req.socket.remoteAddress ?? 'unknown';
     const previous = consentAttempts.get(peer);
     const limit =
       previous && previous.until > Date.now() ? previous : { count: 0, until: Date.now() + 60_000 };
