@@ -1,5 +1,7 @@
 # Comand 0.1.0 verification record
 
+Latest follow-up: executable commit `3a0126474bd56cd7508d8c89cb0a2058ad033c78` is built and installed on both Mac and Linux hubs. Local verification passed all 44 tests. [CI run 41166362540](https://github.com/IMONsergey/comand/actions/runs/41166362540) passed Ubuntu core, macOS core (one Linux-only skip), and all four browser cases. Public DNS/TLS and ChatGPT registration are still pending; the exact deployment checkpoint is in [PUBLIC_DEPLOYMENT.md](PUBLIC_DEPLOYMENT.md). The original release evidence below remains a historical baseline.
+
 Date: 2026-10-31. This record documents the completed local release checks and identifies external integrations that were not configured. Runtime observations below were reported by the maintainer operating the real devices; they are separate from the automated test suite. No credentials or device tokens are included.
 
 ## Current release status
