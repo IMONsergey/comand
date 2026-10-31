@@ -44,6 +44,18 @@ curl -f http://127.0.0.1:4310/health
 
 The status command redacts device tokens. On Mac, service stdout/stderr are in the corresponding state directory. On Linux, use `journalctl --user -u UNIT_NAME` (the installer prints the exact unit name).
 
+### Linux shells without a user-bus environment
+
+An automation or SSH shell may not inherit `XDG_RUNTIME_DIR` even when the user's systemd manager is already running. Check that `/run/user/$(id -u)/bus` exists, then supply the existing user bus explicitly for service commands:
+
+```bash
+env XDG_RUNTIME_DIR="/run/user/$(id -u)" \
+  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
+  node dist/cli.js service status --kind hub
+```
+
+The same environment applies to `install` and `restart` and to `--kind agent`. It does not create a missing user manager. `loginctl show-user "$(id -un)" --property=Linger` reports whether services can continue after logout. If lingering is needed but disabled, an administrator must enable it for that user.
+
 ## TLS and networking
 
 Keep a directly running hub on `127.0.0.1` and expose it through your existing Nginx/Caddy. Set `--public-url` to the exact HTTPS origin. If listening on a non-loopback address (such as inside Docker), an explicit HTTPS public URL is mandatory. Configure the reverse proxy to preserve the public Host header and allow request bodies of at least 5 MiB. Do not cache API, OAuth or MCP responses.

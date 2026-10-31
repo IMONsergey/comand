@@ -39,3 +39,16 @@ Overview/jobs/devices/projects/settings navigation; live counts from real API, e
 ## Acceptance
 
 Unit/integration tests on real SQLite, real processes and temp dirs. HTTP unauthenticated/CSRF/device isolation/idempotency/state/log/security tests. Durable task survives agent and hub restart; duplicate delivery does not repeat command; cancellation stops process group; dead supervisor becomes uncertain. Path traversal/symlink/write conflicts rejected. MCP initialize/tools/call via official Client over HTTP, OAuth PKCE and replay tests. Browser visual and interaction checks desktop/mobile, real fixture device and job. Build/typecheck/test before publishing. Install and exercise on available Mac/Linux with dedicated directories. Real ChatGPT connection requires connector registration; report precisely if that last account-level step is unavailable.
+
+## Release 0.1.0 acceptance checkpoint (2026-10-31)
+
+This contract states intended behavior. Completed checks and external limitations are documented separately in [VERIFICATION.md](../../VERIFICATION.md); the presence of a requirement above is not evidence that its deployment or account integration was verified.
+
+- [x] Local core verification: 40 passing tests, typecheck and production build; Ubuntu/macOS core CI passed, with one Linux-only parser test skipped on macOS.
+- [x] Real macOS launchd installation and live hub/agent restart recovery, one execution, idempotency and full UTF-8 logs; official MCP discovery/file read and isolated JPEG inspection passed.
+- [x] Real Linux systemd user installation and live hub/agent restart recovery, one execution, idempotency and full UTF-8 logs; official MCP discovery/file read passed.
+- [x] Final desktop/mobile browser suite after the mobile viewport fix: all four cases passed in [CI run 41164324625](https://github.com/IMONsergey/comand/actions/runs/41164324625) on adcb7ea.
+- [x] Final screenshots reviewed and saved in docs/images/; separate real-Mac Chrome run passed all four E2E cases in 39.9 seconds on the built adcb7ea application.
+- [x] Installed executable revision adcb7ea1c9eda1504ebe8e2612ac050deb226ef0 verified on both platforms; hub and agent services rebuilt/restarted and running with last exit code zero. Labels, PIDs and sanitized lifecycle observations are recorded in VERIFICATION.md. Subsequent verification-documentation publication is a separate documentation-only commit.
+
+The two current installations use independent local loopback hubs. A shared public HTTPS hub has not been deployed; domain/DNS and authorized root proxy access were unavailable. ChatGPT account registration has not been performed. Docker configuration exists, but its runtime deployment has not been tested. These remain explicit limits of the delivered verification.
