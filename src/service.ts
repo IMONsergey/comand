@@ -26,6 +26,30 @@ function execute(command: string, args: string[], tolerateFailure = false) {
   return result;
 }
 
+/** bootout may return before launchd removes a loaded job. Never bootstrap over it. */
+export function unloadLaunchAgent(
+  target: string,
+  run: (args: string[]) => { status: number | null; error?: Error } = (args) =>
+    execute('launchctl', args, true),
+  pause: () => void = () => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  },
+) {
+  const stopped = run(['bootout', target]);
+  if (stopped.error) throw stopped.error;
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    const state = run(['print', target]);
+    if (state.error) throw state.error;
+    if (state.status === null) throw Error('Could not determine whether launchd unloaded Comand');
+    if (state.status !== 0) return;
+    if (attempt === 100)
+      throw Error(
+        'launchd has not unloaded the previous Comand service. Its files were not replaced; inspect the service and try again.',
+      );
+    pause();
+  }
+}
+
 export function serviceDefinition(
   kind: 'hub' | 'agent',
   dataDir: string,
@@ -105,8 +129,7 @@ export function serviceCli(args: string[]): void {
       if (!existsSync(path)) writeFileSync(path, '', { mode: 0o600 });
       chmodSync(path, 0o600);
     }
-    if (process.platform === 'darwin')
-      execute('launchctl', ['bootout', `${target}/${definition.label}`], true);
+    if (process.platform === 'darwin') unloadLaunchAgent(`${target}/${definition.label}`);
     writeFileSync(definition.path, definition.content, { mode: 0o600 });
     if (process.platform === 'darwin') execute('launchctl', ['bootstrap', target, definition.path]);
     else {
@@ -115,8 +138,7 @@ export function serviceCli(args: string[]): void {
     }
     console.log(`Installed ${definition.label}\nConfiguration: ${definition.path}`);
   } else if (action === 'uninstall') {
-    if (process.platform === 'darwin')
-      execute('launchctl', ['bootout', `${target}/${definition.label}`], true);
+    if (process.platform === 'darwin') unloadLaunchAgent(`${target}/${definition.label}`);
     else execute('systemctl', ['--user', 'disable', '--now', definition.label], true);
     if (existsSync(definition.path)) unlinkSync(definition.path);
     if (process.platform === 'linux') execute('systemctl', ['--user', 'daemon-reload']);

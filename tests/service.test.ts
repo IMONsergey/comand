@@ -4,7 +4,59 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { serviceDefinition } from '../src/service.js';
+import { serviceDefinition, unloadLaunchAgent } from '../src/service.js';
+
+test('launchd update waits for a disappearing job and refuses to replace a still-loaded service', () => {
+  const calls: string[][] = [];
+  let waits = 0;
+  unloadLaunchAgent(
+    'gui/501/comand',
+    (args) => {
+      calls.push(args);
+      return { status: args[0] === 'print' && waits >= 3 ? 113 : 0 };
+    },
+    () => {
+      waits++;
+    },
+  );
+  assert.equal(waits, 3);
+  assert.throws(
+    () =>
+      unloadLaunchAgent(
+        'gui/501/unknown',
+        () => ({ status: null }),
+        () => {},
+      ),
+    /determine/,
+  );
+  assert.deepEqual(calls[0], ['bootout', 'gui/501/comand']);
+  assert.equal(calls.filter((args) => args[0] === 'print').length, 4);
+  unloadLaunchAgent(
+    'gui/501/absent',
+    () => ({ status: 113 }),
+    () => {
+      throw Error('must not wait for an absent job');
+    },
+  );
+  assert.throws(
+    () =>
+      unloadLaunchAgent(
+        'gui/501/stuck',
+        () => ({ status: 0 }),
+        () => {},
+      ),
+    /not unloaded/,
+  );
+  assert.throws(
+    () =>
+      unloadLaunchAgent(
+        'gui/501/error',
+        () => ({ status: null, error: new Error('manager missing') }),
+        () => {},
+      ),
+    /manager missing/,
+  );
+});
 
 test(
   'Linux service definition is accepted by the actual systemd unit parser',
