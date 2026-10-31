@@ -18,9 +18,7 @@ export function ProjectSearch({
   onSaved: (project?: Project) => Promise<void>;
   onManual: () => void;
 }) {
-  const [deviceId, setDeviceId] = useState(
-    devices.find((device) => device.online)?.id ?? devices[0]?.id ?? '',
-  );
+  const [deviceId, setDeviceId] = useState(devices.length === 1 ? devices[0]!.id : '');
   const [query, setQuery] = useState('');
   const [searchPath, setSearchPath] = useState('');
   const [search, setSearch] = useState<Discovery | null>(null);
@@ -120,6 +118,9 @@ export function ProjectSearch({
             setSearchPath('');
           }}
         >
+          <option value="" disabled>
+            Выберите устройство
+          </option>
           {devices.map((item) => (
             <option value={item.id} key={item.id}>
               {item.name}
@@ -192,7 +193,9 @@ export function ProjectSearch({
           </>
         )}
       </button>
-      {!device?.online ? (
+      {!device ? (
+        <p role="status">Выберите компьютер, на котором находится проект.</p>
+      ) : !device.online ? (
         <p role="status">Устройство не в сети. Поиск станет доступен после подключения.</p>
       ) : (
         !device.projectDiscovery && (

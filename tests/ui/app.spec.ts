@@ -507,6 +507,8 @@ test('find an existing project before registering it, then reuse the same projec
   const before = hub.store.listProjects().length;
   await page.getByRole('button', { name: 'Найти проект', exact: true }).click();
   let dialog = page.getByRole('dialog', { name: 'Найти проект', exact: true });
+  await expect(dialog.getByRole('button', { name: 'Найти на устройстве' })).toBeDisabled();
+  await dialog.getByLabel('Устройство для поиска').selectOption({ label: 'UI test computer' });
   await dialog.getByLabel('Название или часть пути').fill('existing-site');
   await dialog.getByRole('button', { name: 'Найти на устройстве' }).click();
   await expect(dialog.getByRole('region', { name: 'Найденные папки' })).toContainText(existing);
@@ -517,6 +519,7 @@ test('find an existing project before registering it, then reuse the same projec
   expect(project).toBeTruthy();
   await page.getByRole('button', { name: 'Найти проект', exact: true }).click();
   dialog = page.getByRole('dialog', { name: 'Найти проект', exact: true });
+  await dialog.getByLabel('Устройство для поиска').selectOption({ label: 'UI test computer' });
   await dialog.getByLabel('Название или часть пути').fill('existing-site');
   await dialog
     .getByRole('region', { name: 'Уже добавленные проекты' })
