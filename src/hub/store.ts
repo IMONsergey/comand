@@ -555,7 +555,10 @@ export class HubStore {
       }
       if (!terminalStates.has(job.status)) {
         job.status = value.status;
-        if (value.status === 'running') job.startedAt ??= value.startedAt ?? now();
+        // Fast jobs may first report their terminal state. Preserve the
+        // supervisor's start evidence without changing an already saved time.
+        if (value.startedAt) job.startedAt ??= value.startedAt;
+        if (value.status === 'running') job.startedAt ??= now();
         if (terminalStates.has(value.status)) job.finishedAt = value.finishedAt ?? now();
         if (value.exitCode !== undefined) job.exitCode = value.exitCode;
         if (value.error !== undefined) job.error = value.error;

@@ -128,8 +128,49 @@ export function serviceCli(args: string[]): void {
     const result =
       process.platform === 'darwin'
         ? execute('launchctl', ['print', `${target}/${definition.label}`], true)
-        : execute('systemctl', ['--user', 'status', '--no-pager', definition.label], true);
-    console.log(result.stdout || result.stderr);
-    if (result.status) process.exitCode = result.status;
+        : execute(
+            'systemctl',
+            [
+              '--user',
+              'show',
+              '--property=ActiveState,SubState,MainPID,ExecMainStatus,NRestarts',
+              definition.label,
+            ],
+            true,
+          );
+    console.log(`Service: ${definition.label}`);
+    if (result.error || result.status !== 0) {
+      console.log(
+        'Service status unavailable. Check that the service is installed and your user service manager is running.',
+      );
+      process.exitCode = result.status || 1;
+      return;
+    }
+    // launchctl print includes inherited credentials; systemctl status includes
+    // arbitrary application journal output. Expose lifecycle fields only.
+    const patterns =
+      process.platform === 'darwin'
+        ? [
+            /^\tstate = ([a-z -]+)$/m,
+            /^\tpid = ([0-9]+)$/m,
+            /^\tlast exit code = ([0-9]+|\(never exited\))$/m,
+            /^\truns = ([0-9]+)$/m,
+          ]
+        : [
+            /^SubState=([a-z-]+)$/m,
+            /^MainPID=([0-9]+)$/m,
+            /^ExecMainStatus=([0-9]+)$/m,
+            /^NRestarts=([0-9]+)$/m,
+          ];
+    const labels = [
+      'State',
+      'PID',
+      'Last exit',
+      process.platform === 'darwin' ? 'Starts' : 'Restarts',
+    ];
+    patterns.forEach((pattern, index) => {
+      const value = result.stdout?.match(pattern)?.[1];
+      if (value) console.log(`${labels[index]}: ${value}`);
+    });
   }
 }

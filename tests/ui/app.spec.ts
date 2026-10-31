@@ -72,6 +72,20 @@ test('login, project, real command, file result, pairing and responsive navigati
   await dialog
     .getByLabel('Заметки и инструкции')
     .fill('Реальный временный проект. Не содержит демонстрационных результатов.');
+  await page.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/api/overview' && response.status() === 200,
+  );
+  await expect(page.getByRole('button', { name: 'Обновить данные', exact: true })).not.toHaveClass(
+    /refreshing/,
+  );
+  // Let the poll's React commit and passive focus effects finish before checking stability.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+  await expect(dialog.getByLabel('Заметки и инструкции')).toBeFocused();
   await dialog.getByRole('button', { name: 'Создать проект', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Проверка интерфейса' })).toBeVisible();
   await page.getByRole('button', { name: 'Задачи', exact: true }).click();
@@ -92,6 +106,27 @@ test('login, project, real command, file result, pairing and responsive navigati
   dialog = page.getByRole('dialog');
   await dialog.getByLabel('Операция', { exact: true }).selectOption('files.read');
   await dialog.getByLabel('Путь относительно проекта').fill('ui-result.txt');
+  await expect
+    .poll(
+      async () =>
+        dialog.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const viewport = window.visualViewport;
+          const left = viewport?.offsetLeft ?? 0;
+          const width = viewport?.width ?? window.innerWidth;
+          return {
+            insideViewport: rect.left >= left - 2 && rect.right <= left + width + 2,
+            hasHorizontalOverflow: element.scrollWidth > element.clientWidth + 2,
+            scale: viewport?.scale ?? 1,
+          };
+        }),
+      { message: 'Focused task form stays inside the visual viewport without automatic zoom' },
+    )
+    .toEqual({
+      insideViewport: true,
+      hasHorizontalOverflow: false,
+      scale: 1,
+    });
   await dialog.getByRole('button', { name: 'Создать задачу', exact: true }).click();
   await expect(page.getByRole('dialog').locator('.result-output')).toContainText('created by UI');
   await page.keyboard.press('Escape');

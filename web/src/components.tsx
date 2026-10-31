@@ -140,18 +140,25 @@ export function Modal({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const oldOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const timer = window.setTimeout(
-      () => ref.current?.querySelector<HTMLElement>('input, select, textarea, button')?.focus(),
+      () =>
+        ref.current
+          ?.querySelector<HTMLElement>('input, select, textarea, button')
+          ?.focus({ preventScroll: true }),
       0,
     );
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
       if (event.key === 'Tab') {
         const items = ref.current?.querySelectorAll<HTMLElement>(
@@ -174,9 +181,9 @@ export function Modal({
       clearTimeout(timer);
       document.removeEventListener('keydown', key);
       document.body.style.overflow = oldOverflow;
-      previous?.focus();
+      previous?.focus({ preventScroll: true });
     };
-  }, [onClose]);
+  }, []);
   return (
     <div
       className="modal-backdrop"

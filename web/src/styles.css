@@ -2424,3 +2424,15 @@ select {
     font-size: 11px;
   }
 }
+
+/* Keep mobile browser focus at the user's existing viewport scale. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea,
+  .search-input input,
+  .table-toolbar select,
+  .code-input {
+    font-size: 16px;
+  }
+}

@@ -607,3 +607,64 @@ test('lost log acknowledgment followed by restart accepts matching overlap and g
     await f.close();
   }
 });
+
+test('fast completion retains reported start time and protects recorded timestamps', async () => {
+  const f = await fixture();
+  try {
+    const device = f.enroll();
+    const project = f.hub.store.createProject({
+      deviceId: device.deviceId,
+      name: 'Fast command',
+      root: '/work/fast',
+    });
+    const create = (key: string) =>
+      f.hub.store.createJob({
+        projectId: project.id,
+        idempotencyKey: key,
+        operation: { kind: 'command', command: 'true', timeoutMs: 1000 },
+      });
+    const startedAt = '2026-10-31T12:00:00.000Z';
+    const finishedAt = '2026-10-31T12:00:00.010Z';
+    const replacement = '2026-10-31T13:00:00.000Z';
+    const fast = create('fast-completed-before-poll');
+    f.hub.store.poll(device.deviceId);
+    // The supervisor finishes before the agent observes any running state.
+    const response = await f.request(
+      `/api/agent/jobs/${fast.id}/update`,
+      { jobId: fast.id, status: 'succeeded', startedAt, finishedAt, exitCode: 0 },
+      device.token,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(f.hub.store.getJob(fast.id)?.startedAt, startedAt);
+    assert.equal(f.hub.store.getJob(fast.id)?.finishedAt, finishedAt);
+    // A duplicate terminal report cannot revise either original timestamp.
+    f.hub.store.updateJob(device.deviceId, {
+      jobId: fast.id,
+      status: 'succeeded',
+      startedAt: replacement,
+      finishedAt: replacement,
+    });
+    assert.equal(f.hub.store.getJob(fast.id)?.startedAt, startedAt);
+    assert.equal(f.hub.store.getJob(fast.id)?.finishedAt, finishedAt);
+    const observed = create('running-start-already-recorded');
+    f.hub.store.poll(device.deviceId);
+    f.hub.store.updateJob(device.deviceId, { jobId: observed.id, status: 'running', startedAt });
+    f.hub.store.updateJob(device.deviceId, {
+      jobId: observed.id,
+      status: 'failed',
+      startedAt: replacement,
+      finishedAt,
+    });
+    assert.equal(f.hub.store.getJob(observed.id)?.startedAt, startedAt);
+    const unstarted = create('failed-without-start-evidence');
+    f.hub.store.poll(device.deviceId);
+    f.hub.store.updateJob(device.deviceId, {
+      jobId: unstarted.id,
+      status: 'failed',
+      error: 'Capability unavailable before execution',
+    });
+    assert.equal(f.hub.store.getJob(unstarted.id)?.startedAt, null);
+  } finally {
+    await f.close();
+  }
+});
