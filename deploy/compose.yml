@@ -1,0 +1,29 @@
+services:
+  comand:
+    build:
+      context: ..
+    restart: unless-stopped
+    environment:
+      COMAND_PUBLIC_URL: ${COMAND_PUBLIC_URL:?Set the HTTPS origin}
+    volumes:
+      - comand-data:/data
+    expose:
+      - '4310'
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      COMAND_DOMAIN: ${COMAND_DOMAIN:?Set a hostname with DNS pointing at this server}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - comand
+volumes:
+  comand-data:
+  caddy-data:
+  caddy-config:

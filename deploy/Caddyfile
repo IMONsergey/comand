@@ -1,0 +1,6 @@
+{$COMAND_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy comand:4310 {
+        flush_interval -1
+    }
+}

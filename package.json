@@ -1,0 +1,48 @@
+{
+  "name": "comand",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Your computers, projects and durable jobs — controlled from chat.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "comand": "dist/cli.js",
+    "comand-agent": "dist/agent/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts hub",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "tsc -p tsconfig.json && vite build",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "node --import tsx --test --test-isolation=none --test-concurrency=1 tests/*.test.ts",
+    "start": "node dist/cli.js hub",
+    "agent": "node dist/agent/cli.js",
+    "test:e2e": "playwright test",
+    "verify": "npm run check && npm test && npm run build"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.7",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "playwright": "^1.56.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.0",
+    "prettier": "3.9.10",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.0"
+  }
+}
