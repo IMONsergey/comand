@@ -536,19 +536,21 @@ export class HubStore {
         const logs = Buffer.from(row.logs);
         const offset = value.log.offset;
         if (offset > logs.length) throw new HubError(409, 'Log offset has a gap', 'log_offset');
-        if (offset < logs.length) {
-          if (
-            offset + bytes.length > logs.length ||
-            !logs.subarray(offset, offset + bytes.length).equals(bytes)
-          )
-            throw new HubError(409, 'Log replay does not match stored bytes', 'log_conflict');
-        } else if (bytes.length) {
-          if (logs.length + bytes.length > MAX_JOB_LOG_BYTES)
+        // A lost acknowledgment can replay a saved prefix plus newly produced
+        // output in one chunk. Verify every overlapping byte before appending
+        // only the unseen tail; the surrounding transaction commits both the
+        // bytes and state/cursor together, or preserves everything on conflict.
+        const overlap = Math.min(bytes.length, logs.length - offset);
+        if (!logs.subarray(offset, offset + overlap).equals(bytes.subarray(0, overlap)))
+          throw new HubError(409, 'Log replay does not match stored bytes', 'log_conflict');
+        const tail = bytes.subarray(overlap);
+        if (tail.length) {
+          if (logs.length + tail.length > MAX_JOB_LOG_BYTES)
             throw new HubError(413, 'Job log limit reached; agent must truncate logs', 'log_limit');
           this.db
             .prepare('UPDATE jobs SET logs=? WHERE id=?')
-            .run(Buffer.concat([logs, bytes]), job.id);
-          job.logBytes = logs.length + bytes.length;
+            .run(Buffer.concat([logs, tail]), job.id);
+          job.logBytes = logs.length + tail.length;
         }
       }
       if (!terminalStates.has(job.status)) {

@@ -545,3 +545,65 @@ test('job lists omit result payloads while detail preserves the full result', as
     await f.close();
   }
 });
+
+test('lost log acknowledgment followed by restart accepts matching overlap and grown tail exactly once', async () => {
+  const f = await fixture();
+  let reopened: Awaited<ReturnType<typeof createHub>> | undefined;
+  try {
+    const device = f.enroll();
+    const project = f.hub.store.createProject({
+      deviceId: device.deviceId,
+      name: 'Lost acknowledgment',
+      root: '/work/recovery',
+    });
+    const job = f.hub.store.createJob({
+      projectId: project.id,
+      idempotencyKey: 'lost-log-ack-recovery',
+      operation: { kind: 'command', command: 'true', timeoutMs: 1000 },
+    });
+    f.hub.store.poll(device.deviceId);
+    const prefix = Buffer.from('начало\n');
+    const complete = Buffer.from('начало\nготово\n');
+    // The hub commits this upload, but the agent never saves the returned cursor.
+    f.hub.store.updateJob(device.deviceId, {
+      jobId: job.id,
+      status: 'running',
+      log: { offset: 0, data: prefix.toString('base64') },
+    });
+    await f.hub.close();
+    reopened = await createHub({ dataDir: f.dataDir, adminToken, port: 0 });
+    const url = await reopened.start();
+    const update = (offset: number, bytes: Buffer, status = 'succeeded') =>
+      fetch(`${url}/api/agent/jobs/${job.id}/update`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${device.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jobId: job.id,
+          status,
+          log: { offset, data: bytes.toString('base64') },
+        }),
+      });
+    const mismatch = Buffer.from(complete);
+    mismatch[0] = 0x41;
+    assert.equal((await update(0, mismatch)).status, 409);
+    assert.equal((await update(prefix.length + 1, Buffer.from('gap'))).status, 409);
+    assert.equal(reopened.store.getJob(job.id)?.status, 'running');
+    assert.equal(reopened.store.getLogs(job.id).text, prefix.toString('utf8'));
+    // Output grew while disconnected. Replay starts at the stale zero cursor.
+    const recovered = await update(0, complete);
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(await recovered.json(), { logBytes: complete.length, status: 'succeeded' });
+    // Both full and partial duplicate ranges are harmless after acknowledgment.
+    assert.equal((await update(0, complete)).status, 200);
+    assert.equal((await update(4, complete.subarray(4))).status, 200);
+    assert.deepEqual(reopened.store.getLogs(job.id), {
+      text: complete.toString('utf8'),
+      nextOffset: complete.length,
+      hasMore: false,
+    });
+    assert.equal(reopened.store.getJob(job.id)?.logBytes, complete.length);
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+});
