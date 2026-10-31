@@ -20,6 +20,7 @@ import { remoteBackend } from './mcp/client-backend.js';
 import { agentCli } from './agent/cli.js';
 import { VERSION } from './shared/protocol.js';
 import { serviceCli } from './service.js';
+import { shellQuote } from './shared/shell.js';
 
 interface HubConfig {
   host: string;
@@ -87,7 +88,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       mode: 0o600,
     });
     console.log(
-      `Comand initialized. Settings: ${join(dataDir, 'hub.json')}\nOwner key: ${join(dataDir, 'admin.token')}\nStart from this checkout: node dist/cli.js hub --data-dir ${JSON.stringify(dataDir)}`,
+      `Comand initialized. Settings: ${join(dataDir, 'hub.json')}\nOwner key: ${join(dataDir, 'admin.token')}\nStart from this checkout: node dist/cli.js hub --data-dir ${shellQuote(dataDir)}`,
     );
     return;
   }

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { atomicJson, readJson, type Acceptance, type LocalStatus } from './state.js';
 import { executeFileOperation, projectRoot } from './files.js';
 import { launchInspectionBrowser } from './browser.js';
+import { executeProcessOperation, ProcessUncertainError } from './processes.js';
 const MAX_LOG = 10 * 1024 * 1024;
 const MARKER = Buffer.from('\n[comand: log truncated at 10 MiB]\n');
 export async function supervise(dir: string) {
@@ -130,6 +131,9 @@ export async function supervise(dir: string) {
         if (timedOut) status.error = `Command exceeded timeout (${op.timeoutMs} ms)`;
         else if (status.status === 'failed')
           status.error = `Command exited with ${exit.code ?? exit.signal}`;
+      } else if (op.kind.startsWith('process.')) {
+        status.result = await executeProcessOperation(dir, accepted, root);
+        status.status = 'succeeded';
       } else if (op.kind === 'browser.inspect') {
         if (!accepted.config.allowBrowser)
           throw Error('Browser inspection is disabled. Pair with --allow-browser to enable it.');
@@ -196,7 +200,7 @@ export async function supervise(dir: string) {
       }
     }
   } catch (e) {
-    status.status = 'failed';
+    status.status = e instanceof ProcessUncertainError ? 'uncertain' : 'failed';
     status.error = e instanceof Error ? e.message : String(e);
   } finally {
     clearInterval(heartbeat);

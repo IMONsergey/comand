@@ -27,6 +27,7 @@ import {
   InvalidScopeError,
   InvalidTokenError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { OWNER } from '../hub/accounts.js';
 import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
 
 export const SCOPES = ['comand:read', 'comand:write', 'comand:execute'];
@@ -46,6 +47,8 @@ export interface PendingAuthorization {
   expires: number;
 }
 interface CodeRecord {
+  principal: string;
+  credential_version: number;
   hash: string;
   client_id: string;
   challenge: string;
@@ -74,7 +77,7 @@ export interface ConnectionGrant {
   revokedAt: string | null;
 }
 
-/** Single-owner authorization server; opaque, hashed tokens and rotating refresh families. */
+/** Per-principal authorization server; opaque, hashed tokens and rotating refresh families. */
 export class OAuthProvider implements OAuthServerProvider {
   readonly clientsStore: OAuthRegisteredClientsStore;
   readonly skipLocalPkceValidation = true; // PKCE is checked atomically with code consumption below.
@@ -85,6 +88,8 @@ export class OAuthProvider implements OAuthServerProvider {
   constructor(
     dataDir: string,
     readonly resource: URL,
+    private readonly credentialVersion: (principal: string) => number | undefined = (id) =>
+      id === OWNER ? 0 : undefined,
   ) {
     if (
       !['http:', 'https:'].includes(resource.protocol) ||
@@ -118,6 +123,19 @@ export class OAuthProvider implements OAuthServerProvider {
       CREATE TABLE IF NOT EXISTS oauth_grants (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, scopes TEXT NOT NULL, created INTEGER NOT NULL, last_used INTEGER, revoked INTEGER);
       CREATE TABLE IF NOT EXISTS oauth_tokens (hash TEXT PRIMARY KEY, kind TEXT NOT NULL, client_id TEXT NOT NULL, grant_id TEXT NOT NULL REFERENCES oauth_grants(id), scopes TEXT NOT NULL, resource TEXT NOT NULL, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS oauth_tokens_grant ON oauth_tokens(grant_id);`);
+    // Migrations deliberately attach historical grants/codes to the legacy owner.
+    for (const table of ['oauth_codes', 'oauth_grants']) {
+      const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+        name: string;
+      }>;
+      if (!columns.some((c) => c.name === 'principal'))
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN principal TEXT NOT NULL DEFAULT 'owner'`);
+      if (!columns.some((c) => c.name === 'credential_version'))
+        this.db.exec(
+          `ALTER TABLE ${table} ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0`,
+        );
+    }
+    this.db.exec('CREATE INDEX IF NOT EXISTS oauth_grants_principal ON oauth_grants(principal)');
     this.clientsStore = {
       getClient: (id) => this.getClient(id),
       registerClient: async (input) => {
@@ -255,13 +273,17 @@ export class OAuthProvider implements OAuthServerProvider {
     if (!row) throw new InvalidRequestError('Authorization request expired or already completed');
     return JSON.parse(row.document) as PendingAuthorization;
   }
-  approveRequest(id: string): string {
+  approveRequest(id: string, principal = OWNER): string {
+    const version = this.credentialVersion(principal);
+    if (version === undefined) throw new InvalidRequestError('Account is unavailable');
     return this.transaction(() => {
       const request = this.getRequest(id);
       const code = secret();
       this.db.prepare('DELETE FROM oauth_requests WHERE id=?').run(id);
       this.db
-        .prepare('INSERT INTO oauth_codes VALUES (?,?,?,?,?,?,?)')
+        .prepare(
+          'INSERT INTO oauth_codes(hash,client_id,challenge,redirect_uri,scopes,resource,expires,principal,credential_version) VALUES (?,?,?,?,?,?,?,?,?)',
+        )
         .run(
           hash(code),
           request.clientId,
@@ -270,6 +292,8 @@ export class OAuthProvider implements OAuthServerProvider {
           JSON.stringify(request.scopes),
           request.resource,
           now() + 120,
+          principal,
+          version,
         );
       const redirect = new URL(request.redirectUri);
       redirect.searchParams.set('code', code);
@@ -292,7 +316,12 @@ export class OAuthProvider implements OAuthServerProvider {
     const row = this.db
       .prepare('SELECT * FROM oauth_codes WHERE hash=? AND client_id=? AND expires>?')
       .get(hash(authorizationCode), client.client_id, now()) as CodeRecord | undefined;
-    if (!row) throw new InvalidGrantError('Invalid authorization code');
+    if (
+      !row ||
+      row.credential_version !== this.credentialVersion(row.principal) ||
+      row.resource !== this.resource.href
+    )
+      throw new InvalidGrantError('Invalid authorization code');
     return row.challenge;
   }
   async exchangeAuthorizationCode(
@@ -309,6 +338,8 @@ export class OAuthProvider implements OAuthServerProvider {
         .get(hash(code), client.client_id, now()) as CodeRecord | undefined;
       if (
         !row ||
+        row.resource !== this.resource.href ||
+        row.credential_version !== this.credentialVersion(row.principal) ||
         !verifier ||
         !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) ||
         !redirectUri ||
@@ -324,8 +355,10 @@ export class OAuthProvider implements OAuthServerProvider {
       this.db.prepare('DELETE FROM oauth_codes WHERE hash=?').run(hash(code));
       const grantId = secret();
       this.db
-        .prepare('INSERT INTO oauth_grants(id,client_id,scopes,created) VALUES (?,?,?,?)')
-        .run(grantId, client.client_id, row.scopes, now());
+        .prepare(
+          'INSERT INTO oauth_grants(id,client_id,scopes,created,principal,credential_version) VALUES (?,?,?,?,?,?)',
+        )
+        .run(grantId, client.client_id, row.scopes, now(), row.principal, row.credential_version);
       return this.issueTokens(client.client_id, grantId, JSON.parse(row.scopes) as string[]);
     });
   }
@@ -374,13 +407,19 @@ export class OAuthProvider implements OAuthServerProvider {
     if (!row || row.expires <= now() || row.resource !== this.resource.href)
       throw new InvalidGrantError('Invalid refresh token');
     if (row.used) {
-      this.revokeGrant(row.grant_id);
+      this.revokeGrantForToken(row.grant_id);
       throw new InvalidGrantError('Refresh token replay; connection revoked');
     }
     const grant = this.db
-      .prepare('SELECT revoked FROM oauth_grants WHERE id=?')
-      .get(row.grant_id) as { revoked: number | null } | undefined;
-    if (!grant || grant.revoked !== null) throw new InvalidGrantError('Connection revoked');
+      .prepare('SELECT revoked,principal,credential_version FROM oauth_grants WHERE id=?')
+      .get(row.grant_id) as
+      { revoked: number | null; principal: string; credential_version: number } | undefined;
+    if (
+      !grant ||
+      grant.revoked !== null ||
+      grant.credential_version !== this.credentialVersion(grant.principal)
+    )
+      throw new InvalidGrantError('Connection revoked');
     const previous = JSON.parse(row.scopes) as string[];
     const requested = scopes?.length ? [...new Set(scopes)] : previous;
     if (requested.some((s) => !previous.includes(s)))
@@ -397,10 +436,15 @@ export class OAuthProvider implements OAuthServerProvider {
     if (token.length > 512) throw new InvalidTokenError('Invalid token');
     const row = this.db
       .prepare(
-        "SELECT t.* FROM oauth_tokens t JOIN oauth_grants g ON g.id=t.grant_id WHERE t.hash=? AND t.kind='access' AND g.revoked IS NULL AND t.expires>?",
+        "SELECT t.*,g.principal,g.credential_version FROM oauth_tokens t JOIN oauth_grants g ON g.id=t.grant_id WHERE t.hash=? AND t.kind='access' AND g.revoked IS NULL AND t.expires>?",
       )
-      .get(hash(token), now()) as TokenRecord | undefined;
-    if (!row || row.resource !== this.resource.href)
+      .get(hash(token), now()) as
+      (TokenRecord & { principal: string; credential_version: number }) | undefined;
+    if (
+      !row ||
+      row.resource !== this.resource.href ||
+      row.credential_version !== this.credentialVersion(row.principal)
+    )
       throw new InvalidTokenError('Invalid or expired token');
     this.db.prepare('UPDATE oauth_grants SET last_used=? WHERE id=?').run(now(), row.grant_id);
     return {
@@ -409,6 +453,7 @@ export class OAuthProvider implements OAuthServerProvider {
       scopes: JSON.parse(row.scopes) as string[],
       expiresAt: row.expires,
       resource: new URL(row.resource),
+      extra: { principal: row.principal },
     };
   }
   async revokeToken(
@@ -418,12 +463,12 @@ export class OAuthProvider implements OAuthServerProvider {
     const row = this.db
       .prepare('SELECT grant_id FROM oauth_tokens WHERE hash=? AND client_id=?')
       .get(hash(request.token), client.client_id) as { grant_id: string } | undefined;
-    if (row) this.revokeGrant(row.grant_id);
+    if (row) this.revokeGrantForToken(row.grant_id);
   }
-  listGrants(): ConnectionGrant[] {
+  listGrants(principal = OWNER): ConnectionGrant[] {
     const rows = this.db
-      .prepare('SELECT * FROM oauth_grants ORDER BY created DESC LIMIT 200')
-      .all() as unknown as Array<{
+      .prepare('SELECT * FROM oauth_grants WHERE principal=? ORDER BY created DESC LIMIT 200')
+      .all(principal) as unknown as Array<{
       id: string;
       client_id: string;
       scopes: string;
@@ -441,8 +486,21 @@ export class OAuthProvider implements OAuthServerProvider {
       revokedAt: row.revoked ? new Date(row.revoked * 1000).toISOString() : null,
     }));
   }
-  revokeGrant(id: string): void {
+  revokeGrant(id: string, principal = OWNER): boolean {
+    return !!this.db
+      .prepare('UPDATE oauth_grants SET revoked=? WHERE id=? AND principal=?')
+      .run(now(), id, principal).changes;
+  }
+  private revokeGrantForToken(id: string): void {
     this.db.prepare('UPDATE oauth_grants SET revoked=? WHERE id=?').run(now(), id);
+  }
+  revokePrincipal(principal: string): void {
+    this.transaction(() => {
+      this.db
+        .prepare('UPDATE oauth_grants SET revoked=? WHERE principal=? AND revoked IS NULL')
+        .run(now(), principal);
+      this.db.prepare('DELETE FROM oauth_codes WHERE principal=?').run(principal);
+    });
   }
   close(): void {
     if (!this.closed) {

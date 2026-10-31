@@ -13,6 +13,8 @@ const xml = (value: string) =>
   );
 const unitQuote = (value: string) =>
   `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`;
+// ExecStart expands dollars independently of quoting. Environment= does not.
+const execQuote = (value: string) => unitQuote(value.replace(/\$/g, '$$$$'));
 function execute(command: string, args: string[], tolerateFailure = false) {
   const result = spawnSync(command, args, { encoding: 'utf8', env: process.env });
   if (result.error || result.status !== 0) {
@@ -60,7 +62,7 @@ export function serviceDefinition(
   }
   if (platform !== 'linux') throw Error('Automatic service installation supports macOS and Linux');
   const name = `comand-${kind}-${id}.service`;
-  const content = `[Unit]\nDescription=Comand ${kind}\nAfter=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=${resolve(built, '..').replace(/%/g, '%%')}\nExecStart=${args.map(unitQuote).join(' ')}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=20\nKillMode=${kind === 'agent' ? 'process' : 'mixed'}\nUMask=0077\n${unitEnvironment}\n\n[Install]\nWantedBy=default.target\n`;
+  const content = `[Unit]\nDescription=Comand ${kind}\nAfter=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=${resolve(built, '..').replace(/%/g, '%%')}\nExecStart=${args.map(execQuote).join(' ')}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=20\nKillMode=${kind === 'agent' ? 'process' : 'mixed'}\nUMask=0077\n${unitEnvironment}\n\n[Install]\nWantedBy=default.target\n`;
   return { label: name, path: join(homedir(), '.config', 'systemd', 'user', name), content };
 }
 

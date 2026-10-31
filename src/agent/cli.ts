@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { shellQuote } from '../shared/shell.js';
 import { pairDevice, runAgent, agentStatus, resolveJob, loadConfig, syncJobs } from './index.js';
 export async function agentCli(args = process.argv.slice(2)) {
   const [command, ...rest] = args;
@@ -38,7 +39,7 @@ export async function agentCli(args = process.argv.slice(2)) {
       dataDir,
     });
     console.log(
-      `Paired ${config.name} (${config.deviceId}). Run from this checkout: node dist/agent/cli.js run --data-dir ${JSON.stringify(dataDir)}`,
+      `Paired ${config.name} (${config.deviceId}). Run from this checkout: node dist/agent/cli.js run --data-dir ${shellQuote(dataDir)}`,
     );
     if (config.allowShell)
       console.log(

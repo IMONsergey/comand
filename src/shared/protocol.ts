@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 export const MAX_LOG_CHUNK = 64 * 1024;
 export const MAX_FILE_BYTES = 1024 * 1024;
 export const operationSchema = z.discriminatedUnion('kind', [
@@ -11,6 +11,33 @@ export const operationSchema = z.discriminatedUnion('kind', [
       timeoutMs: z.number().int().min(1000).max(86_400_000).default(300_000),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal('process.start'),
+      command: z.string().min(1).max(32_768),
+      timeoutMs: z.number().int().min(1000).max(86_400_000).default(3_600_000),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('process.input'),
+      sessionId: z.string().regex(/^ps_[a-f0-9]{64}$/),
+      input: z.string().max(65_536),
+      closeStdin: z.boolean().default(false),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('process.output'),
+      sessionId: z.string().regex(/^ps_[a-f0-9]{64}$/),
+      offset: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(65_536).default(16_384),
+    })
+    .strict(),
+  z
+    .object({ kind: z.literal('process.stop'), sessionId: z.string().regex(/^ps_[a-f0-9]{64}$/) })
+    .strict(),
+  z.object({ kind: z.literal('process.list') }).strict(),
   z.object({ kind: z.literal('files.list'), path: z.string().max(4096).default('.') }).strict(),
   z
     .object({
@@ -180,6 +207,13 @@ export interface ApiError {
 export interface SessionInfo {
   authenticated: boolean;
   csrfToken?: string;
+  user?: AccountUser;
+  registrationEnabled?: boolean;
+}
+export interface AccountUser {
+  id: string;
+  name: string;
+  email: string;
 }
 export interface AgentConfig {
   hubUrl: string;

@@ -1,19 +1,33 @@
 # Security model
 
-Comand is a single-owner remote execution service. Possession of the owner key or an OAuth grant with `comand:execute` permits commands on devices that opted into shell access. Shell commands have the agent OS account's permissions. Run it as a dedicated non-root account where practical.
+Comand is a remote execution service for trusted users and their own devices. Registered accounts have separate durable SQLite workspaces. Browser and MCP requests choose a workspace using authenticated identity, never a user-supplied tenant ID. Existing 0.1 data and grants remain with the legacy owner; registration cannot claim that workspace.
 
-- Defaults are loopback-only. Remote use requires HTTPS.
-- Owner keys and device tokens are cryptographically random; device tokens are hashed at the hub.
-- Pairing tokens expire after 10 minutes and are single-use.
-- Browser sessions use HttpOnly cookies, CSRF tokens and Origin validation. HTTPS deployments set Secure cookies.
-- Host validation limits DNS-rebinding access. No credentialed cross-origin UI API.
-- MCP accepts Bearer credentials, not browser cookies. OAuth uses client/redirect/audience/scope binding and PKCE.
-- File APIs resolve project/approved roots and reject traversal and symlink mutations. These checks are **not** isolation from a hostile concurrent local process.
-- Queue and device-side acceptance enforce durable deduplication. Uncertain execution is never automatically retried.
-- Logs and output are untrusted data, rendered as text. No injected HTML execution.
-- Revocation prevents future authentication; already accepted work may continue. Stop the device process/group locally when immediate disconnection is required.
-- Secrets and state must stay outside Git. Do not paste owner keys or device configs into issues, project notes or logs.
+## Identity
 
-Protect `admin.token`, agent `config.json`, OAuth key/database and backups. Rotating the owner key is an administrative operation; this release binds the hub database to its initialized owner key and does not provide a transparent key-rotation workflow. Do not simply overwrite that file.
+- Passwords use asynchronous, salted scrypt; raw passwords are not stored. IP/account throttling and bounded KDF concurrency protect authentication endpoints.
+- Recovery uses a cryptographically random one-time code, stored only as a hash. Email is an unverified login identifier; no email delivery is configured.
+- Cookie sessions are persisted as hashes, HttpOnly, SameSite=Lax and Secure over HTTPS. Cookie mutations require same-origin CSRF checks.
+- Credential versions invalidate sessions, pending OAuth codes, access and refresh tokens after password change/recovery, even if a crash interrupts explicit grant revocation.
+- OAuth binds codes/grants/tokens to principal, client, resource, redirect and scope, checks PKCE and rotates refresh tokens. Old schema records migrate to legacy owner.
+- The owner key is an administrative fallback for that owner's workspace, not a general impersonation token for other accounts. The host administrator can access data files and must be trusted.
 
-Report suspected issues privately to the repository owner. Avoid publishing credentials or live execution endpoints in a public issue.
+## Devices and execution
+
+- Pairing codes are single-use and expire after ten minutes. Device tokens are hashed at the hub. Concurrent pairing cannot overwrite an existing device configuration.
+- Revocation prevents future authentication. Already accepted commands or interactive sessions may continue on the device; stop those processes locally if immediate termination is required.
+- Shell commands have the agent OS account's permissions. Run agents as dedicated non-root accounts where practical. File roots do not sandbox shell.
+- File APIs validate canonical approved roots and reject traversal/symlink mutation. They do not promise isolation from a hostile concurrent local process modifying those paths.
+- Durable acceptance deduplicates jobs on the hub and device. Unknown results remain uncertain and are never automatically retried. Process-session input has durable receipt semantics; an uncertain write is not replayed automatically.
+- Interactive sessions use private file IPC and are scoped to project and agent state. Process controls require shell execution permission. The guardian owns its live process group; stale saved PIDs are not used to kill unrelated processes.
+- Text/output are untrusted and rendered as text. They do not become instructions or executable UI.
+
+## Deployment
+
+- Loopback by default; external deployments require HTTPS and an explicit public origin. Host/Origin checks and no permissive credentialed CORS.
+- Only the direct loopback reverse proxy is trusted for client IP. The proxy must overwrite forwarded headers.
+- Installer downloads use HTTPS, checksums and explicit packaged paths. Installer executes code with the installing user's permissions. SHA-256 protects transfer integrity; it does not protect against compromise of the trusted distribution server.
+- Protect the entire hub/agent state, including admin.token, config.json, accounts.sqlite, per-account stores, OAuth keys/databases and backups. Keep them out of Git and support logs.
+- Never expose a hub state folder as a static download directory. The distribution server exposes only named release files.
+- Use consistent backups as described in docs/OPERATIONS.md. Database migrations are additive; a rollback must restore both code and a matching saved state if needed.
+
+Report suspected issues privately to the repository owner. Do not publish credentials, recovery codes or command output containing secrets.

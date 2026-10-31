@@ -189,7 +189,7 @@ export function Jobs({
   );
 }
 function OperationIcon({ operation }: { operation: Operation }) {
-  return operation.kind === 'command' ? (
+  return operation.kind === 'command' || operation.kind.startsWith('process.') ? (
     <Terminal size={17} />
   ) : operation.kind === 'browser.inspect' ? (
     <Globe2 size={17} />
@@ -199,6 +199,11 @@ function OperationIcon({ operation }: { operation: Operation }) {
 }
 const operations = [
   { value: 'command', label: 'Команда в терминале' },
+  { value: 'process.start', label: 'Запустить длительный процесс' },
+  { value: 'process.list', label: 'Список процессов проекта' },
+  { value: 'process.input', label: 'Отправить ввод в процесс' },
+  { value: 'process.output', label: 'Прочитать вывод процесса' },
+  { value: 'process.stop', label: 'Остановить процесс' },
   { value: 'files.list', label: 'Список файлов' },
   { value: 'files.read', label: 'Прочитать файл' },
   { value: 'files.write', label: 'Записать файл' },
@@ -221,6 +226,9 @@ export function NewJob({
   const [projectId, setProjectId] = useState(projects[0]?.id ?? '');
   const [kind, setKind] = useState<Operation['kind']>('command');
   const [command, setCommand] = useState('');
+  const [sessionId, setSessionId] = useState('');
+  const [processInput, setProcessInput] = useState('');
+  const [closeStdin, setCloseStdin] = useState(false);
   const [path, setPath] = useState('.');
   const [content, setContent] = useState('');
   const [query, setQuery] = useState('');
@@ -242,7 +250,7 @@ export function NewJob({
   const project = projects.find((item) => item.id === projectId);
   const device = devices.find((item) => item.id === project?.deviceId);
   const capabilityError =
-    kind === 'command' && !device?.allowShell
+    (kind === 'command' || kind.startsWith('process.')) && !device?.allowShell
       ? 'На устройстве не разрешены команды терминала.'
       : kind === 'browser.inspect' && !device?.allowBrowser
         ? 'На устройстве не разрешена проверка веб-страниц.'
@@ -253,7 +261,13 @@ export function NewJob({
     event.preventDefault();
     setError(null);
     let candidate: unknown;
-    if (kind === 'command') candidate = { kind, command, timeoutMs: timeout * 1000 };
+    if (kind === 'command' || kind === 'process.start')
+      candidate = { kind, command, timeoutMs: timeout * 1000 };
+    else if (kind === 'process.list') candidate = { kind };
+    else if (kind === 'process.input')
+      candidate = { kind, sessionId, input: processInput, closeStdin };
+    else if (kind === 'process.output') candidate = { kind, sessionId, offset, limit };
+    else if (kind === 'process.stop') candidate = { kind, sessionId };
     else if (kind === 'files.list') candidate = { kind, path };
     else if (kind === 'files.read') candidate = { kind, path, offset, limit };
     else if (kind === 'files.write')
@@ -335,7 +349,7 @@ export function NewJob({
             )}
           </div>
         )}
-        {kind === 'command' && (
+        {(kind === 'command' || kind === 'process.start') && (
           <>
             <Field
               label="Команда"
@@ -364,6 +378,57 @@ export function NewJob({
             </Field>
           </>
         )}
+        {kind.startsWith('process.') && (
+          <div className="notice">
+            Процессы работают через стандартный ввод и вывод, без интерактивного терминала (PTY).
+            Запуск возвращает ID сессии; чтение и ввод отправляются отдельными задачами.
+          </div>
+        )}
+        {['process.input', 'process.output', 'process.stop'].includes(kind) && (
+          <Field
+            label="ID сессии процесса"
+            hint="Полный sessionId из результата запуска или списка процессов."
+          >
+            <input
+              className="mono"
+              required
+              pattern="ps_[a-f0-9]{64}"
+              value={sessionId}
+              onChange={(event) => setSessionId(event.target.value)}
+              placeholder="ps_…"
+            />
+          </Field>
+        )}
+        {kind === 'process.input' && (
+          <>
+            <Field
+              label="Ввод в процесс"
+              hint="Для отправки строки добавьте перевод строки клавишей Enter."
+            >
+              <textarea
+                className="code-input"
+                rows={4}
+                maxLength={65536}
+                value={processInput}
+                onChange={(event) => setProcessInput(event.target.value)}
+                spellCheck={false}
+              />
+            </Field>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={closeStdin}
+                onChange={(event) => setCloseStdin(event.target.checked)}
+              />
+              <span>Закрыть стандартный ввод после отправки</span>
+            </label>
+          </>
+        )}
+        {kind === 'process.stop' && (
+          <div className="notice warning">
+            Остановка завершит процесс и его группу. Выполненные изменения сохранятся.
+          </div>
+        )}
         {kind.startsWith('files.') && (
           <Field
             label={
@@ -381,7 +446,7 @@ export function NewJob({
             />
           </Field>
         )}
-        {kind === 'files.read' && (
+        {(kind === 'files.read' || kind === 'process.output') && (
           <div className="form-grid">
             <Field label="Смещение, байт">
               <input
@@ -396,7 +461,7 @@ export function NewJob({
               <input
                 type="number"
                 min={1}
-                max={1048576}
+                max={kind === 'process.output' ? 65536 : 1048576}
                 required
                 value={limit}
                 onChange={(event) => setLimit(Number(event.target.value))}

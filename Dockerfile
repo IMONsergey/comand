@@ -5,7 +5,8 @@ RUN npm ci
 COPY tsconfig*.json vite.config.ts ./
 COPY src ./src
 COPY web ./web
-RUN npm run build
+COPY scripts ./scripts
+RUN npm run build:release
 
 FROM node:24-bookworm-slim
 ENV NODE_ENV=production COMAND_DATA_DIR=/data COMAND_HOST=0.0.0.0 COMAND_PORT=4310
@@ -13,6 +14,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force && mkdir /data && chown node:node /data
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/releases ./releases
 USER node
 VOLUME ["/data"]
 EXPOSE 4310

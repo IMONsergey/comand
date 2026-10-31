@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, Folder, Monitor, Plus, Shield, Terminal, Unplug } from 'lucide-react';
 import type { Device, Pairing } from '../../src/shared/protocol';
 import { api, shellQuote } from './api';
@@ -122,7 +122,7 @@ export function Devices({
               </div>
               <div className="device-card-footer">
                 <Shield size={14} />
-                <span>Доступ к указанным папкам</span>
+                <span>Файлы в разрешённых папках</span>
                 {!device.revokedAt && (
                   <button
                     className="text-button danger-text"
@@ -175,6 +175,10 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
   const [shell, setShell] = useState(false);
   const [browser, setBrowser] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const existing = useRef<string[]>([]);
+  const [connected, setConnected] = useState<Device | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState(false);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -183,11 +187,31 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
     setBusy(true);
     setError(null);
     try {
+      existing.current = (await api<Device[]>('/devices')).map((device) => device.id);
       setPairing(await api<Pairing>('/pairings', { method: 'POST' }));
+      setConnected(null);
+      setChecked(false);
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+  async function checkConnection() {
+    setChecking(true);
+    setError(null);
+    try {
+      const devices = await api<Device[]>('/devices');
+      const device = devices.find(
+        (item) =>
+          !existing.current.includes(item.id) && item.name === name.trim() && !item.revokedAt,
+      );
+      setConnected(device ?? null);
+      setChecked(true);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setChecking(false);
     }
   }
   const remaining = pairing
@@ -196,33 +220,26 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
   const validFields = name.trim() && root.startsWith('/') && stateDir.startsWith('/');
   const command =
     pairing && validFields
-      ? `node dist/agent/cli.js pair --url ${shellQuote(window.location.origin)} --code ${shellQuote(pairing.code)} --name ${shellQuote(name.trim())} --root ${shellQuote(root)} --data-dir ${shellQuote(stateDir)}${shell ? ' --allow-shell' : ''}${browser ? ' --allow-browser' : ''}`
+      ? `(comand_installer=$(mktemp) && curl -fsSL ${shellQuote(`${window.location.origin}/install.sh`)} -o "$comand_installer" && bash "$comand_installer" --url ${shellQuote(window.location.origin)} --code ${shellQuote(pairing.code)} --name ${shellQuote(name.trim())} --root ${shellQuote(root)} --data-dir ${shellQuote(stateDir)}${shell ? ' --allow-shell' : ''}${browser ? ' --allow-browser' : ''}; comand_status=$?; rm -f "$comand_installer"; exit "$comand_status")`
       : '';
-  const runCommand = `node dist/agent/cli.js run --data-dir ${shellQuote(stateDir)}`;
   return (
     <Modal
       title="Подключить устройство"
-      subtitle="Одноразовый код связывает агент с этим хабом."
+      subtitle="Установка одной командой. Mac и Linux, без Git и ручной сборки."
       onClose={onClose}
       wide
     >
+      <div className="pair-platforms">
+        <span>macOS · Intel / Apple Silicon</span>
+        <span>Linux · x64 / arm64</span>
+      </div>
       <div className="setup-step">
         <span className="step-number">1</span>
         <div>
-          <h3>Установите агент на компьютере</h3>
-          <p>
-            На Mac или Linux клонируйте репозиторий Comand и из папки Comand выполните:{' '}
-            <code>npm ci && npm run build</code>. Для сборки и запуска нужен Node.js 24 или новее.
-          </p>
-        </div>
-      </div>
-      <div className="setup-step">
-        <span className="step-number">2</span>
-        <div>
           <h3>Задайте границы доступа</h3>
           <p>
-            Пути указываются на подключаемом компьютере. Агент получит доступ только к выбранной
-            папке.
+            Укажите существующую папку на подключаемом компьютере. Файловые операции ограничены этой
+            папкой. Команды терминала имеют права вашего пользователя ОС.
           </p>
         </div>
       </div>
@@ -230,6 +247,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
         <Field label="Название устройства">
           <input
             value={name}
+            disabled={!!pairing}
             onChange={(event) => setName(event.target.value)}
             maxLength={100}
             placeholder="Например: Рабочий Mac"
@@ -239,6 +257,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
           <input
             className="mono"
             value={root}
+            disabled={!!pairing}
             onChange={(event) => setRoot(event.target.value)}
             maxLength={4096}
             placeholder="/Users/you/Projects"
@@ -252,6 +271,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
         <input
           className="mono"
           value={stateDir}
+          disabled={!!pairing}
           onChange={(event) => setStateDir(event.target.value)}
           placeholder="/Users/you/.comand-agent"
           maxLength={4096}
@@ -261,6 +281,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
         <label className="checkbox">
           <input
             type="checkbox"
+            disabled={!!pairing}
             checked={shell}
             onChange={(event) => setShell(event.target.checked)}
           />
@@ -272,20 +293,24 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
         <label className="checkbox">
           <input
             type="checkbox"
+            disabled={!!pairing}
             checked={browser}
             onChange={(event) => setBrowser(event.target.checked)}
           />
           <span>
             Разрешить проверку веб-страниц
-            <small>Для browser.inspect нужен установленный Chromium.</small>
+            <small>Нужен Chromium или Google Chrome на компьютере.</small>
           </span>
         </label>
       </div>
       <div className="setup-step">
-        <span className="step-number">3</span>
+        <span className="step-number">2</span>
         <div>
-          <h3>Создайте код и выполните команду из папки Comand</h3>
-          <p>Код действует 10 минут и используется один раз. Не передавайте его посторонним.</p>
+          <h3>Скопируйте команду в терминал компьютера</h3>
+          <p>
+            Установщик загрузит агент, при необходимости Node.js 24 и включит автозапуск. Код
+            действует 10 минут и используется один раз.
+          </p>
         </div>
       </div>
       <ErrorBox error={error} />
@@ -315,17 +340,15 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
                 : 'Срок действия кода истёк'}
             </span>
           </div>
-          {command && remaining > 0 && (
+          {command && remaining > 0 && !connected && (
             <>
               <div className="command-box">
                 <pre>{command}</pre>
                 <Copy value={command} label="Скопировать команду" />
               </div>
-              <p className="muted small">После подключения из папки Comand запустите агент:</p>
-              <div className="command-box">
-                <pre>{runCommand}</pre>
-                <Copy value={runCommand} />
-              </div>
+              <p className="muted small">
+                Дождитесь завершения установки, затем проверьте подключение ниже.
+              </p>
             </>
           )}
           {remaining === 0 && (
@@ -337,10 +360,35 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
               Создать новый код
             </button>
           )}
+          {connected ? (
+            <div className="pairing-status" role="status">
+              <Check size={16} /> <strong>{connected.name}</strong> —{' '}
+              {connected.online
+                ? 'в сети, можно создавать проект.'
+                : 'зарегистрирован. Агент ещё не вышел на связь.'}
+            </div>
+          ) : (
+            checked && (
+              <div className="pairing-status" role="status">
+                Новое устройство пока не появилось. Дождитесь завершения установки и проверьте ещё
+                раз. Если терминал показал ошибку, сохраните её текст.
+              </div>
+            )
+          )}
           <div className="modal-actions">
-            <button className="button button-primary" onClick={onDone}>
-              <Check size={17} />
-              Проверить подключение
+            <button
+              className="button button-primary"
+              disabled={checking}
+              onClick={() => (connected ? onDone() : void checkConnection())}
+            >
+              {checking ? (
+                <Busy>Проверяем…</Busy>
+              ) : (
+                <>
+                  <Check size={17} />
+                  {connected ? 'Готово' : 'Проверить подключение'}
+                </>
+              )}
             </button>
           </div>
         </>

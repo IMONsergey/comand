@@ -2,9 +2,9 @@
 
 ## State
 
-Default hub directory: `~/.comand/hub`. It holds `hub.json`, `admin.token`, SQLite state and OAuth encryption key/database. Default agent directory: `~/.comand/agent`, containing the private device config, daemon identity, project locks and per-job evidence. Change directories only via explicit `--data-dir`.
+Default hub directory: `~/.comand/hub`. It holds `hub.json`, `admin.token`, the legacy owner SQLite state, accounts.sqlite (identity and sessions), accounts/<id>/ (separate user workspaces), and OAuth encryption key/database. Back up the entire directory, including all account subdirectories. Default agent directory: `~/.comand/agent`, containing the private device config, daemon identity, project locks and per-job evidence. Change directories only via explicit `--data-dir`.
 
-These files are operational state, not repository content. Keep them private and preserve them during code updates. Back up both sides. To make a consistent filesystem backup, stop the hub; wait for or explicitly cancel active jobs before stopping/backing up the agent state. Copy SQLite database and any WAL files together. Do not copy a running database alone with ordinary file-copy tools.
+These files are operational state, not repository content. Keep them private and preserve them during code updates. Back up both sides. To make a consistent filesystem backup, stop the hub; wait for or explicitly cancel active jobs and stop interactive sessions before stopping/backing up the agent state. Interactive process brokers survive agent shutdown; stopping only the agent is not a consistent backup boundary. Copy SQLite database and any WAL files together. Do not copy a running database alone with ordinary file-copy tools.
 
 ## Task state
 
@@ -22,7 +22,7 @@ These files are operational state, not repository content. Keep them private and
 
 ## Recover an uncertain job
 
-1. Inspect its saved acceptance, status and output under the agent's `jobs/JOB_ID` directory.
+1. Inspect its saved acceptance, status and output under the agent's `jobs/SHA256_OF_JOB_ID` directory.
 2. Check whether the actual operation finished or left files/services in a partially changed state.
 3. Check and stop remaining processes if needed. Never kill unrelated processes based solely on a stale PID.
 4. Once the outcome is understood and the recorded group is no longer alive, acknowledge explicitly:
@@ -89,8 +89,21 @@ For a new public hostname, point DNS to the server and install a valid TLS certi
 
 ## Updates
 
-Save state, finish active work, update code with `git pull --ff-only`, run `npm ci` and `npm run build`, restart the hub/agent services. Re-run `npm run verify` when building changes locally. Do not replace or regenerate owner/device credentials as part of a routine update.
+Save state, finish active work, update code with `git pull --ff-only`, run `npm ci`, `npm run verify` and `npm run build:release`, restart the hub/agent services. Re-run `npm run verify` when building changes locally. Do not replace or regenerate owner/device credentials as part of a routine update.
 
 ## Retention
 
 Per-job logs stop at 10 MiB with an explicit truncation marker. Results are bounded. Completed local evidence is retained to prevent replay and support recovery; automatic retention/compaction is not implemented. Monitor free disk space. Do not delete a job's acceptance record while the hub may still deliver that job. History export/archival should be added before using this release as a high-volume multi-year service.
+
+
+## Registration and recovery
+
+Ordinary registration always creates an empty isolated account. To add email/password to the existing workspace, log in with its owner key and use Account → Add email login. Do not create a normal account expecting existing devices to move into it. Password recovery requires the saved one-time recovery code; no email sender is configured. The code rotates after recovery. Changing a password or recovering access invalidates old sessions and OAuth access, refresh tokens and pending authorizations.
+
+## Interrupted device pairing
+
+`pairing.lock` serializes direct CLI enrollment before consuming a one-time code. Normal failures remove it. If the CLI itself was killed, inspect the PID in this file and ensure no pairing process is still running. Only then remove that lock and retry with a fresh code. Never remove or overwrite an existing `config.json` just to retry setup; it contains the installed device identity. Installer `.install-lock` directories similarly require checking that the earlier installer stopped.
+
+## Distribution publication
+
+Build into a new staging directory, then publish the complete `releases` directory while the hub is stopped or with an atomic directory switch. Do not replace a live archive and checksum one at a time: a client could observe different releases. Installer rejects a checksum mismatch and keeps the prior installation. The committed builder packages only production dependencies and built application files; runtime state stays outside the archive.

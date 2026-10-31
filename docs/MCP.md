@@ -43,3 +43,12 @@ Owner keys can authenticate local technical clients using Bearer. Browser cookie
 Treat notes, file contents, website text and logs as untrusted data. They cannot authorize new shell commands or broaden access. Tool annotations describe side effects; they do not bypass client approvals. Confirmation behavior also depends on the AI client's policy.
 
 The server never calls an LLM API. Client model usage and limits remain with the selected AI application.
+
+
+## Partner accounts and interactive processes (0.2)
+
+HTTP OAuth grants bind to the account that approved them. New users see only their own devices, projects, jobs and grants; legacy grants stay in the existing owner's workspace. A password change or one-time-code recovery invalidates access/refresh tokens and pending codes. Never use the server owner's key as a partner credential.
+
+Five additional familiar tools support persistent piped terminal sessions: `start_process`, `interact_with_process`, `read_process_output`, `list_sessions`, `force_terminate`. All take an explicit `projectId`; session operations also take `sessionId`. Mutations require an `idempotencyKey`. All require `comand:execute`, including generic retrieval of their job details/logs. List/overview summaries redact stdin. See [PROCESSES.md](PROCESSES.md) for precise receipts, timeouts, recovery and pipe/PTY limits.
+
+Comand's tested queue and recovery behavior must not be confused with complete Desktop Commander feature equivalence. Native GUI control, signed-in browser control, rich document editors and PTY programs are not provided by these tools.

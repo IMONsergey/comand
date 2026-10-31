@@ -306,3 +306,109 @@ test('get_job emits browser JPEG as image without duplicating base64 in metadata
     assert.deepEqual(JSON.parse(originalText.text), original);
   }
 });
+
+test('MCP process mutations require intent keys and read grants cannot execute or retrieve process payloads', async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'comand-mcp-process-'));
+  const store = new HubStore(dataDir, randomBytes(32).toString('base64url'));
+  const device = store.enroll({
+    pairingCode: store.createPairing().code,
+    name: 'Process device',
+    platform: 'linux',
+    roots: [dataDir],
+    allowShell: true,
+    allowBrowser: false,
+    version: '0.1.0',
+  });
+  const project = store.createProject({
+    deviceId: device.deviceId,
+    name: 'Process',
+    root: dataDir,
+  });
+  const sessionId = `ps_${'a'.repeat(64)}`;
+  const input = store.createJob({
+    projectId: project.id,
+    operation: {
+      kind: 'process.input',
+      sessionId,
+      input: 'PRIVATE_STDIN_SENTINEL',
+      closeStdin: false,
+    },
+    idempotencyKey: 'private-process-input',
+  });
+  store.poll(device.deviceId);
+  store.updateJob(device.deviceId, {
+    jobId: input.id,
+    status: 'succeeded',
+    result: { text: 'PRIVATE_OUTPUT_SENTINEL' },
+  });
+  const clients: Client[] = [],
+    servers: ReturnType<typeof createMcpServer>[] = [];
+  t.after(async () => {
+    for (const client of clients) await client.close();
+    for (const server of servers) await server.close();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+  const connect = async (scopes: string[]) => {
+    const client = new Client({ name: 'process-scope-test', version: '1' }),
+      server = createMcpServer(store, scopes);
+    clients.push(client);
+    servers.push(server);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(b);
+    await client.connect(a);
+    return client;
+  };
+  const reader = await connect(['comand:read']);
+  for (const [name, args] of [
+    ['start_process', { projectId: project.id, command: 'id', idempotencyKey: 'forbidden-start' }],
+    [
+      'interact_with_process',
+      { projectId: project.id, sessionId, input: 'id\n', idempotencyKey: 'forbidden-input' },
+    ],
+    ['read_process_output', { projectId: project.id, sessionId }],
+    ['list_sessions', { projectId: project.id }],
+    ['force_terminate', { projectId: project.id, sessionId, idempotencyKey: 'forbidden-stop' }],
+    ['get_job', { jobId: input.id }],
+    ['get_job_logs', { jobId: input.id }],
+  ] as Array<[string, Record<string, unknown>]>) {
+    const response = await reader.callTool({ name, arguments: args });
+    assert.equal(response.isError, true, name);
+    assert.match(JSON.stringify(response), /comand:execute/);
+    assert.ok(!JSON.stringify(response).includes('PRIVATE_'));
+  }
+  for (const [name, args] of [
+    ['list_jobs', {}],
+    ['project_context', { projectId: project.id }],
+  ] as Array<[string, Record<string, unknown>]>) {
+    const response = await reader.callTool({ name, arguments: args });
+    assert.notEqual(response.isError, true);
+    assert.ok(!JSON.stringify(response).includes('PRIVATE_'), name);
+  }
+  const executor = await connect(['comand:read', 'comand:execute']);
+  const tools = (await executor.listTools()).tools;
+  for (const name of ['start_process', 'interact_with_process', 'force_terminate']) {
+    const tool = tools.find((tool) => tool.name === name)!;
+    assert.ok(tool.inputSchema.required?.includes('projectId'));
+    assert.ok(tool.inputSchema.required?.includes('idempotencyKey'));
+  }
+  const args = {
+    projectId: project.id,
+    command: 'cat',
+    idempotencyKey: 'deduplicated-start-process',
+  };
+  const first = await executor.callTool({ name: 'start_process', arguments: args });
+  const replay = await executor.callTool({ name: 'start_process', arguments: args });
+  assert.equal(first.isError, undefined);
+  assert.equal((first.structuredContent as Job).id, (replay.structuredContent as Job).id);
+  assert.equal((first.structuredContent as Job).operation.kind, 'process.start');
+  assert.equal(
+    (
+      await executor.callTool({
+        name: 'start_process',
+        arguments: { ...args, command: 'different' },
+      })
+    ).isError,
+    true,
+  );
+});

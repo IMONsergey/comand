@@ -1,8 +1,8 @@
 {
   "name": "comand",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Your computers, projects and durable jobs — controlled from chat.",
+  "description": "Your computers, projects and durable jobs \u2014 controlled from chat.",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
@@ -20,7 +20,8 @@
     "start": "node dist/cli.js hub",
     "agent": "node dist/agent/cli.js",
     "test:e2e": "playwright test",
-    "verify": "npm run check && npm test && npm run build"
+    "verify": "npm run check && npm test && npm run build",
+    "build:release": "npm run build && node scripts/build-release.mjs --out releases"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

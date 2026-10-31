@@ -17,7 +17,7 @@ test('both CLI executables run when invoked through npm-style symlinks', async (
   const dir = await mkdtemp(join(tmpdir(), 'comand-cli-links-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   for (const [source, args, expected] of [
-    ['src/cli.ts', ['version'], /^0\.1\.0\s*$/],
+    ['src/cli.ts', ['version'], /^0\.2\.0\s*$/],
     ['src/agent/cli.ts', [], /Usage: comand-agent pair/],
   ] as const) {
     const link = join(dir, source.includes('agent') ? 'comand-agent' : 'comand');

@@ -47,8 +47,8 @@ export interface PairOptions {
 }
 export function validateHubUrl(value: string) {
   const url = new URL(value);
-  if (url.username || url.password || url.search || url.hash)
-    throw Error('Hub URL must not contain credentials, query or fragment');
+  if (url.username || url.password || url.search || url.hash || url.pathname !== '/')
+    throw Error('Hub URL must be an origin without credentials, path, query or fragment');
   if (
     url.protocol !== 'https:' &&
     !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
@@ -69,6 +69,7 @@ async function request<T>(
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15000),
+    redirect: 'error',
   });
   const data = (await response.json()) as T & { error?: string };
   if (!response.ok) throw Error(data.error ?? `Hub returned HTTP ${response.status}`);
@@ -93,35 +94,58 @@ export async function pairDevice(options: PairOptions): Promise<AgentConfig> {
   const hubUrl = validateHubUrl(options.url);
   const dataDir = path.resolve(options.dataDir);
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
-  try {
-    await readFile(path.join(dataDir, 'config.json'));
-    throw Error('This data directory is already paired; use another --data-dir');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-  }
-  const credentials = await request<AgentCredentials>({ hubUrl, token: '' }, '/api/agent/enroll', {
-    pairingCode: options.code,
-    name: options.name,
-    platform: process.platform,
-    roots,
-    allowShell: !!options.allowShell,
-    allowBrowser: !!options.allowBrowser,
-    version: VERSION,
+  // Lock before enrollment: two CLI processes must not consume different codes
+  // and race to replace the same device identity.
+  const pairLockPath = path.join(dataDir, 'pairing.lock');
+  const pairLock = await open(pairLockPath, 'wx', 0o600).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'EEXIST')
+      throw Error(
+        `Pairing is already in progress or was interrupted. Check ${pairLockPath}; remove that lock only after the other pairing process has stopped.`,
+      );
+    throw error;
   });
-  const config: AgentConfig = {
-    hubUrl,
-    ...credentials,
-    name: options.name,
-    roots,
-    allowShell: !!options.allowShell,
-    allowBrowser: !!options.allowBrowser,
-    dataDir,
-    pollMs: 1000,
-    maxConcurrent: 4,
-  };
-  await atomicJson(path.join(dataDir, 'config.json'), config);
-  await chmod(path.join(dataDir, 'config.json'), 0o600);
-  return config;
+  try {
+    await pairLock.writeFile(
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+    );
+    await pairLock.sync();
+    try {
+      await readFile(path.join(dataDir, 'config.json'));
+      throw Error('This data directory is already paired; use another --data-dir');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+    const credentials = await request<AgentCredentials>(
+      { hubUrl, token: '' },
+      '/api/agent/enroll',
+      {
+        pairingCode: options.code,
+        name: options.name,
+        platform: process.platform,
+        roots,
+        allowShell: !!options.allowShell,
+        allowBrowser: !!options.allowBrowser,
+        version: VERSION,
+      },
+    );
+    const config: AgentConfig = {
+      hubUrl,
+      ...credentials,
+      name: options.name,
+      roots,
+      allowShell: !!options.allowShell,
+      allowBrowser: !!options.allowBrowser,
+      dataDir,
+      pollMs: 1000,
+      maxConcurrent: 4,
+    };
+    await atomicJson(path.join(dataDir, 'config.json'), config);
+    await chmod(path.join(dataDir, 'config.json'), 0o600);
+    return config;
+  } finally {
+    await pairLock.close();
+    await unlink(pairLockPath);
+  }
 }
 export async function loadConfig(dataDir: string): Promise<AgentConfig> {
   const config = await readJson<AgentConfig>(path.join(dataDir, 'config.json'));

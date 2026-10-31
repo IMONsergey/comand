@@ -1,9 +1,11 @@
 import express, { type Express, type Request, type RequestHandler } from 'express';
 import type { Server } from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { HubError, HubStore, hashToken } from './store.js';
+import { AccountsStore, OWNER, SESSION_LIFETIME } from './accounts.js';
+import { installDistribution } from '../distribution.js';
 import { VERSION, type Overview, type SessionInfo } from '../shared/protocol.js';
 export { HubStore } from './store.js';
 export interface HubOptions {
@@ -13,8 +15,14 @@ export interface HubOptions {
   port?: number;
   publicUrl?: string;
   webDir?: string;
+  registrationEnabled?: boolean;
+  distributionDir?: string;
 }
 export interface HubAuth {
+  principal(req: Request): string | undefined;
+  authenticateCredentials(input: unknown): Promise<string | undefined>;
+  credentialVersion(principal: string): number | undefined;
+  onCredentialsChanged(listener: (principal: string) => void): () => void;
   isOwnerBearer(req: Request): boolean;
   isOwner(req: Request): boolean;
   requireOwner: RequestHandler;
@@ -23,13 +31,10 @@ export interface HubAuth {
 export interface HubRuntime {
   app: Express;
   store: HubStore;
+  storeFor(principal: string): HubStore;
   auth: HubAuth;
   start(): Promise<string>;
   close(): Promise<void>;
-}
-interface Session {
-  csrfToken: string;
-  expires: number;
 }
 const safeEqual = (a: string, b: string) =>
   timingSafeEqual(Buffer.from(hashToken(a)), Buffer.from(hashToken(b)));
@@ -75,7 +80,20 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
       hop === 0 && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address),
   );
   const store = new HubStore(options.dataDir, options.adminToken);
-  const sessions = new Map<string, Session>();
+  const accounts = new AccountsStore(options.dataDir);
+  const stores = new Map<string, HubStore>([[OWNER, store]]);
+  const credentialListeners = new Set<(principal: string) => void>();
+  const registrationEnabled = options.registrationEnabled ?? true;
+  const storeFor = (principal: string): HubStore => {
+    if (principal !== OWNER && (!/^[a-f0-9-]{36}$/.test(principal) || !accounts.user(principal)))
+      throw new HubError(401, 'Invalid account', 'unauthorized');
+    let selected = stores.get(principal);
+    if (!selected) {
+      selected = new HubStore(join(options.dataDir, 'accounts', principal), options.adminToken);
+      stores.set(principal, selected);
+    }
+    return selected;
+  };
   let server: Server | undefined;
   const originFor = (req: Request) =>
     publicUrl?.origin ??
@@ -88,21 +106,34 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
     const token = bearer(req);
     return !!token && safeEqual(token, options.adminToken);
   };
-  const sessionFor = (req: Request): Session | undefined => {
-    const id = req.headers.cookie
+  const sessionIdFor = (req: Request) =>
+    req.headers.cookie
       ?.split(';')
       .map((s) => s.trim())
       .find((s) => s.startsWith('comand_session='))
       ?.slice('comand_session='.length);
-    if (!id) return;
-    const session = sessions.get(hashToken(id));
-    if (session && session.expires > Date.now()) return session;
-    if (session) sessions.delete(hashToken(id));
+  const csrfFor = (id: string) =>
+    createHmac('sha256', options.adminToken).update(`comand:csrf:${id}`).digest('base64url');
+  const sessionFor = (req: Request) => {
+    const id = sessionIdFor(req);
+    const session = id ? accounts.session(id) : undefined;
+    return session && id ? { ...session, csrfToken: csrfFor(id) } : undefined;
   };
   const auth: HubAuth = {
+    principal(req) {
+      return validBearer(req) ? OWNER : sessionFor(req)?.principal;
+    },
+    authenticateCredentials: (input) => accounts.authenticate(input),
+    credentialVersion: (principal) => accounts.version(principal),
+    onCredentialsChanged(listener) {
+      credentialListeners.add(listener);
+      return () => {
+        credentialListeners.delete(listener);
+      };
+    },
     isOwnerBearer: validBearer,
     isOwner(req) {
-      return validBearer(req) || !!sessionFor(req);
+      return auth.principal(req) !== undefined;
     },
     validateCsrf(req) {
       if (validBearer(req)) return true;
@@ -147,15 +178,38 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
     next();
   });
   app.use(express.json({ limit: '5mb', strict: true }));
+  installDistribution(app, { directory: options.distributionDir });
   app.get('/health', (_req, res) => res.json({ ok: true }));
-  app.get('/api/session', (req, res) => {
+  const sessionInfo = (req: Request): SessionInfo => {
     const session = sessionFor(req);
-    const body: SessionInfo = {
-      authenticated: auth.isOwner(req),
+    const principal = auth.principal(req);
+    return {
+      authenticated: principal !== undefined,
+      registrationEnabled,
       ...(session ? { csrfToken: session.csrfToken } : {}),
+      ...(principal && accounts.user(principal) ? { user: accounts.user(principal) } : {}),
     };
-    res.json(body);
-  });
+  };
+  const setSession = (res: express.Response, principal: string): SessionInfo => {
+    const session = accounts.createSession(principal);
+    res.cookie('comand_session', session.id, {
+      httpOnly: true,
+      secure,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: SESSION_LIFETIME,
+    });
+    return {
+      authenticated: true,
+      registrationEnabled,
+      csrfToken: csrfFor(session.id),
+      ...(accounts.user(principal) ? { user: accounts.user(principal) } : {}),
+    };
+  };
+  const credentialsChanged = (principal: string) => {
+    for (const listener of credentialListeners) listener(principal);
+  };
+  app.get('/api/session', (req, res) => res.json(sessionInfo(req)));
   const attempts = new Map<
     string,
     {
@@ -173,6 +227,7 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
     if (attempts.size > 10000) {
       for (const [address, entry] of attempts)
         if (entry.reset < Date.now()) attempts.delete(address);
+      if (attempts.size > 10000) attempts.delete(attempts.keys().next().value!);
     }
     if (record.count > 30) {
       res.status(429).json({
@@ -183,77 +238,121 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
     }
     next();
   };
-  app.post('/api/login', rateLimit, (req, res) => {
+  const accountAttempts = new Map<string, { count: number; reset: number }>();
+  const publicAuth: RequestHandler = (req, res, next) => {
     if (!sameOrigin(req, false)) {
-      res.status(403).json({ error: 'Foreign login origin rejected', code: 'origin_rejected' });
+      res
+        .status(403)
+        .json({ error: 'Foreign authentication origin rejected', code: 'origin_rejected' });
       return;
     }
-    if (
-      typeof req.body?.token !== 'string' ||
-      req.body.token.length > 1024 ||
-      !safeEqual(req.body.token, options.adminToken)
-    ) {
-      res.status(401).json({ error: 'Invalid owner token', code: 'unauthorized' });
-      return;
+    if (typeof req.body?.email === 'string') {
+      const key = hashToken(req.body.email.trim().toLowerCase());
+      const old = accountAttempts.get(key);
+      const attempt = old && old.reset > Date.now() ? old : { count: 0, reset: Date.now() + 60000 };
+      attempt.count++;
+      accountAttempts.set(key, attempt);
+      if (accountAttempts.size > 10000)
+        accountAttempts.delete(accountAttempts.keys().next().value!);
+      if (attempt.count > 12) {
+        res.status(429).json({
+          error: 'Too many authentication attempts. Try again shortly.',
+          code: 'rate_limited',
+        });
+        return;
+      }
     }
-    for (const [id, s] of sessions) if (s.expires < Date.now()) sessions.delete(id);
-    if (sessions.size >= 1000) sessions.delete(sessions.keys().next().value!);
-    const sessionId = randomBytes(32).toString('base64url');
-    const session: Session = {
-      csrfToken: randomBytes(32).toString('base64url'),
-      expires: Date.now() + 12 * 60 * 60000,
-    };
-    sessions.set(hashToken(sessionId), session);
-    res.cookie('comand_session', sessionId, {
-      httpOnly: true,
-      secure,
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 12 * 60 * 60000,
-    });
-    res.json({ authenticated: true, csrfToken: session.csrfToken } satisfies SessionInfo);
+    next();
+  };
+  app.post('/api/login', rateLimit, publicAuth, async (req, res) => {
+    const principal =
+      typeof req.body?.token === 'string' &&
+      req.body.token.length <= 1024 &&
+      safeEqual(req.body.token, options.adminToken)
+        ? OWNER
+        : await accounts.authenticate(req.body);
+    if (!principal) throw new HubError(401, 'Invalid credentials', 'invalid_credentials');
+    const previous = sessionIdFor(req);
+    if (previous) accounts.deleteSession(previous);
+    res.json(setSession(res, principal));
+  });
+  app.post('/api/register', rateLimit, publicAuth, async (req, res) => {
+    if (!registrationEnabled)
+      throw new HubError(403, 'Registration is disabled', 'registration_disabled');
+    const result = await accounts.register(req.body);
+    res
+      .status(201)
+      .json({ ...setSession(res, result.principal), recoveryCode: result.recoveryCode });
+  });
+  app.post('/api/recover', rateLimit, publicAuth, async (req, res) => {
+    const result = await accounts.recover(req.body);
+    credentialsChanged(result.principal);
+    res.json({ ...setSession(res, result.principal), recoveryCode: result.recoveryCode });
+  });
+  app.get('/api/account', auth.requireOwner, (req, res) => res.json(sessionInfo(req)));
+  app.post('/api/account/password', auth.requireOwner, rateLimit, async (req, res) => {
+    const principal = auth.principal(req)!;
+    await accounts.changePassword(principal, req.body);
+    credentialsChanged(principal);
+    res.json(setSession(res, principal));
+  });
+  app.post('/api/account/claim', auth.requireOwner, rateLimit, async (req, res) => {
+    if (auth.principal(req) !== OWNER)
+      throw new HubError(403, 'Only the legacy owner may claim this workspace', 'forbidden');
+    const result = await accounts.register(req.body, true);
+    res
+      .status(201)
+      .json({ ...setSession(res, result.principal), recoveryCode: result.recoveryCode });
   });
   app.post('/api/logout', auth.requireOwner, (req, res) => {
-    const id = req.headers.cookie
-      ?.split(';')
-      .map((s) => s.trim())
-      .find((s) => s.startsWith('comand_session='))
-      ?.slice('comand_session='.length);
-    if (id) sessions.delete(hashToken(id));
-    res.clearCookie('comand_session', {
-      httpOnly: true,
-      secure,
-      sameSite: 'lax',
-      path: '/',
-    });
-    res.json({ authenticated: false } satisfies SessionInfo);
+    const id = sessionIdFor(req);
+    if (id) accounts.deleteSession(id);
+    res.clearCookie('comand_session', { httpOnly: true, secure, sameSite: 'lax', path: '/' });
+    res.json({ authenticated: false, registrationEnabled } satisfies SessionInfo);
   });
-  app.post('/api/agent/enroll', rateLimit, (req, res) =>
-    res.status(201).json(store.enroll(req.body)),
-  );
+  app.post('/api/agent/enroll', rateLimit, (req, res) => {
+    if (typeof req.body?.pairingCode !== 'string' || req.body.pairingCode.length > 100)
+      throw new HubError(400, 'A valid pairing code is required', 'invalid_request');
+    // Unindexed codes belong only to pre-upgrade owner state, never a new user's store.
+    const principal = accounts.pairingPrincipal(req.body.pairingCode) ?? OWNER;
+    const credentials = storeFor(principal).enroll(req.body);
+    accounts.mapDevice(credentials.token, principal, req.body.pairingCode);
+    res.status(201).json(credentials);
+  });
   const requireDevice: RequestHandler = (req, res, next) => {
     const token = bearer(req);
-    const id = token ? store.authenticateDevice(token) : null;
+    const deviceStore =
+      token && token.length <= 1024
+        ? storeFor(accounts.devicePrincipal(token) ?? OWNER)
+        : undefined;
+    const id = token && deviceStore ? deviceStore.authenticateDevice(token) : null;
     if (!id) {
       res.status(401).json({ error: 'Valid device credentials required', code: 'unauthorized' });
       return;
     }
     res.locals.deviceId = id;
+    res.locals.deviceStore = deviceStore;
     next();
   };
   app.post('/api/agent/poll', requireDevice, (_req, res) =>
-    res.json(store.poll(res.locals.deviceId as string)),
+    res.json((res.locals.deviceStore as HubStore).poll(res.locals.deviceId as string)),
   );
   app.post('/api/agent/jobs/:id/update', requireDevice, (req, res) => {
     if (req.body?.jobId && req.body.jobId !== req.params.id)
       throw new HubError(400, 'URL and payload job IDs disagree');
-    res.json(store.updateJob(res.locals.deviceId as string, { ...req.body, jobId: req.params.id }));
+    res.json(
+      (res.locals.deviceStore as HubStore).updateJob(res.locals.deviceId as string, {
+        ...req.body,
+        jobId: req.params.id,
+      }),
+    );
   });
-  app.get('/api/overview', auth.requireOwner, (_req, res) => {
-    const devices = store.listDevices(),
-      projects = store.listProjects(),
-      jobs = store.listJobs(),
-      counts = store.getJobCounts();
+  const requestStore = (req: Request) => storeFor(auth.principal(req)!);
+  app.get('/api/overview', auth.requireOwner, (req, res) => {
+    const devices = requestStore(req).listDevices(),
+      projects = requestStore(req).listProjects(),
+      jobs = requestStore(req).listJobs(),
+      counts = requestStore(req).getJobCounts();
     const overview: Overview = {
       version: VERSION,
       devices,
@@ -271,40 +370,46 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
     };
     res.json(overview);
   });
-  app.get('/api/devices', auth.requireOwner, (_req, res) => res.json(store.listDevices()));
-  app.post('/api/pairings', auth.requireOwner, (_req, res) =>
-    res.status(201).json(store.createPairing()),
+  app.get('/api/devices', auth.requireOwner, (req, res) =>
+    res.json(requestStore(req).listDevices()),
   );
+  app.post('/api/pairings', auth.requireOwner, (req, res) => {
+    const pairing = requestStore(req).createPairing();
+    accounts.mapPairing(pairing.code, auth.principal(req)!, pairing.expiresAt);
+    res.status(201).json(pairing);
+  });
   app.post('/api/devices/:id/revoke', auth.requireOwner, (req, res) =>
-    res.json(store.revokeDevice(req.params.id as string)),
+    res.json(requestStore(req).revokeDevice(req.params.id as string)),
   );
-  app.get('/api/projects', auth.requireOwner, (_req, res) => res.json(store.listProjects()));
+  app.get('/api/projects', auth.requireOwner, (req, res) =>
+    res.json(requestStore(req).listProjects()),
+  );
   app.post('/api/projects', auth.requireOwner, (req, res) =>
-    res.status(201).json(store.createProject(req.body)),
+    res.status(201).json(requestStore(req).createProject(req.body)),
   );
   app.patch('/api/projects/:id', auth.requireOwner, (req, res) =>
-    res.json(store.updateProject(req.params.id as string, req.body)),
+    res.json(requestStore(req).updateProject(req.params.id as string, req.body)),
   );
-  app.get('/api/jobs', auth.requireOwner, (_req, res) => res.json(store.listJobs()));
+  app.get('/api/jobs', auth.requireOwner, (req, res) => res.json(requestStore(req).listJobs()));
   app.post('/api/jobs', auth.requireOwner, (req, res) => {
     const existing =
       typeof req.body?.idempotencyKey === 'string'
-        ? store.findJobByIdempotencyKey(req.body.idempotencyKey)
+        ? requestStore(req).findJobByIdempotencyKey(req.body.idempotencyKey)
         : undefined;
-    const job = store.createJob(req.body);
+    const job = requestStore(req).createJob(req.body);
     res.status(existing ? 200 : 201).json(job);
   });
   app.get('/api/jobs/:id', auth.requireOwner, (req, res) => {
-    const job = store.getJob(req.params.id as string);
+    const job = requestStore(req).getJob(req.params.id as string);
     if (!job) throw new HubError(404, 'Job not found', 'not_found');
     res.json(job);
   });
   app.post('/api/jobs/:id/cancel', auth.requireOwner, (req, res) =>
-    res.json(store.cancelJob(req.params.id as string)),
+    res.json(requestStore(req).cancelJob(req.params.id as string)),
   );
   app.get('/api/jobs/:id/logs', auth.requireOwner, (req, res) =>
     res.json(
-      store.getLogs(
+      requestStore(req).getLogs(
         req.params.id as string,
         req.query.offset === undefined ? 0 : Number(req.query.offset),
         req.query.limit === undefined ? 65536 : Number(req.query.limit),
@@ -355,6 +460,7 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
   return {
     app,
     store,
+    storeFor,
     auth,
     async start() {
       if (server) {
@@ -389,8 +495,9 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
           closing.closeIdleConnections();
         });
       }
-      sessions.clear();
-      store.close();
+      credentialListeners.clear();
+      accounts.close();
+      for (const workspace of stores.values()) workspace.close();
     },
   };
 }

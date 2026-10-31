@@ -129,10 +129,17 @@ export class HubStore {
    CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,device_id TEXT NOT NULL,idempotency_key TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,logs BLOB NOT NULL DEFAULT X'');
    CREATE UNIQUE INDEX IF NOT EXISTS one_active_project ON jobs(project_id) WHERE status IN ('queued','dispatched','running','uncertain');`);
+    const boundOwner = this.db
+      .prepare("SELECT value FROM metadata WHERE key='admin_token_hash'")
+      .get() as { value: string } | undefined;
+    if (boundOwner && boundOwner.value !== hashToken(adminToken)) {
+      this.db.close();
+      throw new Error(
+        'This workspace belongs to a different owner key. Restore the original admin.token.',
+      );
+    }
     this.db
-      .prepare(
-        'INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-      )
+      .prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)')
       .run('admin_token_hash', hashToken(adminToken));
   }
   close() {
@@ -326,10 +333,14 @@ export class HubStore {
   listJobs(limit = 200): Job[] {
     // List/overview responses are summaries: retain the Job shape with
     // result:null. Retrieve potentially large results only through getJob.
-    // Strip results inside SQLite so they never cross into the JS list.
+    // Strip results and process stdin inside SQLite so they never cross into the JS list.
+    // Input may contain terminal credentials; detail/dispatch retain the original payload.
     return this.db
       .prepare(
-        "SELECT json_set(data, '$.result', NULL) AS data FROM jobs ORDER BY rowid DESC LIMIT ?",
+        `SELECT CASE WHEN json_extract(data, '$.operation.kind') = 'process.input'
+          THEN json_set(data, '$.result', NULL, '$.operation.input', '')
+          ELSE json_set(data, '$.result', NULL) END AS data
+          FROM jobs ORDER BY rowid DESC LIMIT ?`,
       )
       .all(Math.max(1, Math.min(1000, Math.floor(limit))))
       .map((row) => this.decode<Job>(row)!);
@@ -383,7 +394,10 @@ export class HubStore {
       const project = this.getProject(value.projectId);
       if (!project) throw new HubError(404, 'Project not found', 'not_found');
       const device = this.requiredDevice(project.deviceId);
-      if (value.operation.kind === 'command' && !device.allowShell)
+      if (
+        (value.operation.kind === 'command' || value.operation.kind.startsWith('process.')) &&
+        !device.allowShell
+      )
         throw new HubError(
           403,
           'Shell commands are disabled on this device',

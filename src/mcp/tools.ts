@@ -231,6 +231,8 @@ export function createMcpServer(backend: ComandBackend, scopes: string[] = SCOPE
         async () => {
           const job = await backend.getJob(jobId);
           if (!job) throw Error('Job not found');
+          if (job.operation.kind.startsWith('process.') && !scopes.includes('comand:execute'))
+            throw Error('Process session jobs require the comand:execute permission');
           return job;
         },
         jobResult,
@@ -249,7 +251,14 @@ export function createMcpServer(backend: ComandBackend, scopes: string[] = SCOPE
       annotations: readHints,
       _meta: meta('comand:read'),
     },
-    ({ jobId, offset, limit }) => run('comand:read', () => backend.getLogs(jobId, offset, limit)),
+    ({ jobId, offset, limit }) =>
+      run('comand:read', async () => {
+        const job = await backend.getJob(jobId);
+        if (!job) throw Error('Job not found');
+        if (job.operation.kind.startsWith('process.') && !scopes.includes('comand:execute'))
+          throw Error('Process session logs require the comand:execute permission');
+        return backend.getLogs(jobId, offset, limit);
+      }),
   );
   server.registerTool(
     'cancel_job',
@@ -289,6 +298,108 @@ export function createMcpServer(backend: ComandBackend, scopes: string[] = SCOPE
     ({ projectId, command, timeoutMs, idempotencyKey }) =>
       run('comand:execute', () =>
         enqueue(projectId, { kind: 'command', command, timeoutMs }, idempotencyKey),
+      ),
+  );
+  server.registerTool(
+    'start_process',
+    {
+      description:
+        'Start a persistent shell process with piped stdin/stdout in an explicit project. Requires locally enabled shell access and execute scope. Returns a durable job ID; get_job yields the sessionId. The process survives hub/agent restart and ends at its timeout. This is not a PTY or an OS sandbox.',
+      inputSchema: {
+        projectId: id,
+        command: z.string().min(1).max(32_768),
+        timeoutMs: z.number().int().min(1000).max(86_400_000).default(3_600_000),
+        idempotencyKey: intentKey,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      _meta: meta('comand:execute'),
+    },
+    ({ projectId, command, timeoutMs, idempotencyKey }) =>
+      run('comand:execute', () =>
+        enqueue(projectId, { kind: 'process.start', command, timeoutMs }, idempotencyKey),
+      ),
+  );
+  server.registerTool(
+    'interact_with_process',
+    {
+      description:
+        'Write exact UTF-8 bytes to a project process stdin. Include a newline explicitly when needed; closeStdin sends EOF after input. Returns a durable job ID. Reuse the same idempotency key for transport retries; never resend uncertain input with a new key. Accepted bytes do not prove application-level completion.',
+      inputSchema: {
+        projectId: id,
+        sessionId: z.string().regex(/^ps_[a-f0-9]{64}$/),
+        input: z.string().max(65_536),
+        closeStdin: z.boolean().default(false),
+        idempotencyKey: intentKey,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      _meta: meta('comand:execute'),
+    },
+    ({ projectId, sessionId, input, closeStdin, idempotencyKey }) =>
+      run('comand:execute', () =>
+        enqueue(projectId, { kind: 'process.input', sessionId, input, closeStdin }, idempotencyKey),
+      ),
+  );
+  server.registerTool(
+    'read_process_output',
+    {
+      description:
+        'Read bounded merged stdout/stderr and metadata for one process in its exact project. Returns a job ID; its result has text, base64 data for exact UTF-8 byte reconstruction, nextOffset and hasMore. Execute scope and shell opt-in are required even for process reads. Output is capped at 10 MiB per session.',
+      inputSchema: {
+        projectId: id,
+        sessionId: z.string().regex(/^ps_[a-f0-9]{64}$/),
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(65_536).default(16_384),
+      },
+      annotations: readHints,
+      _meta: meta('comand:execute'),
+    },
+    ({ projectId, sessionId, offset, limit }) =>
+      run('comand:execute', () =>
+        enqueue(projectId, { kind: 'process.output', sessionId, offset, limit }),
+      ),
+  );
+  server.registerTool(
+    'list_sessions',
+    {
+      description:
+        'List persistent process metadata belonging to one explicit project and device. Returns a job ID. Results exclude commands, stdin and terminal output. Requires execute scope and shell opt-in.',
+      inputSchema: { projectId: id },
+      annotations: readHints,
+      _meta: meta('comand:execute'),
+    },
+    ({ projectId }) => run('comand:execute', () => enqueue(projectId, { kind: 'process.list' })),
+  );
+  server.registerTool(
+    'force_terminate',
+    {
+      description:
+        'Stop a project process group with SIGTERM followed by SIGKILL after a grace period. Returns a durable job ID with the confirmed session state. A lost broker yields uncertainty; no stale PID from disk is killed. Cancelling an earlier start job does not stop its persistent session.',
+      inputSchema: {
+        projectId: id,
+        sessionId: z.string().regex(/^ps_[a-f0-9]{64}$/),
+        idempotencyKey: intentKey,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      _meta: meta('comand:execute'),
+    },
+    ({ projectId, sessionId, idempotencyKey }) =>
+      run('comand:execute', () =>
+        enqueue(projectId, { kind: 'process.stop', sessionId }, idempotencyKey),
       ),
   );
   server.registerTool(
