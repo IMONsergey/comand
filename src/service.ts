@@ -37,14 +37,30 @@ export function serviceDefinition(
   );
   const cli = join(built, kind === 'hub' ? 'cli.js' : 'agent/cli.js');
   const args = [process.execPath, cli, kind === 'hub' ? 'hub' : 'run', '--data-dir', dataDir];
+  const environment: Record<string, string> = {
+    NODE_ENV: 'production',
+    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+  };
+  if (kind === 'agent' && process.env.COMAND_BROWSER_CHANNEL) {
+    const channel = process.env.COMAND_BROWSER_CHANNEL;
+    if (!['chrome', 'chromium'].includes(channel))
+      throw Error('COMAND_BROWSER_CHANNEL must be chrome or chromium.');
+    environment.COMAND_BROWSER_CHANNEL = channel;
+  }
+  const launchEnvironment = Object.entries(environment)
+    .map(([key, value]) => `<key>${xml(key)}</key><string>${xml(value)}</string>`)
+    .join('');
+  const unitEnvironment = Object.entries(environment)
+    .map(([key, value]) => `Environment=${unitQuote(`${key}=${value}`)}`)
+    .join('\n');
   if (platform === 'darwin') {
     const servicePath = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
-    const content = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array>${args.map((a) => `<string>${xml(a)}</string>`).join('')}</array><key>WorkingDirectory</key><string>${xml(resolve(built, '..'))}</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>AbandonProcessGroup</key><true/><key>StandardOutPath</key><string>${xml(join(dataDir, 'service.stdout.log'))}</string><key>StandardErrorPath</key><string>${xml(join(dataDir, 'service.stderr.log'))}</string><key>EnvironmentVariables</key><dict><key>NODE_ENV</key><string>production</string><key>PATH</key><string>${xml(process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin')}</string></dict></dict></plist>\n`;
+    const content = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array>${args.map((a) => `<string>${xml(a)}</string>`).join('')}</array><key>WorkingDirectory</key><string>${xml(resolve(built, '..'))}</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>AbandonProcessGroup</key><true/><key>StandardOutPath</key><string>${xml(join(dataDir, 'service.stdout.log'))}</string><key>StandardErrorPath</key><string>${xml(join(dataDir, 'service.stderr.log'))}</string><key>EnvironmentVariables</key><dict>${launchEnvironment}</dict></dict></plist>\n`;
     return { label, path: servicePath, content };
   }
   if (platform !== 'linux') throw Error('Automatic service installation supports macOS and Linux');
   const name = `comand-${kind}-${id}.service`;
-  const content = `[Unit]\nDescription=Comand ${kind}\nAfter=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=${unitQuote(resolve(built, '..'))}\nExecStart=${args.map(unitQuote).join(' ')}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=20\nKillMode=${kind === 'agent' ? 'process' : 'mixed'}\nUMask=0077\nEnvironment=NODE_ENV=production\nEnvironment=${unitQuote(`PATH=${process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'}`)}\n\n[Install]\nWantedBy=default.target\n`;
+  const content = `[Unit]\nDescription=Comand ${kind}\nAfter=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=${unitQuote(resolve(built, '..'))}\nExecStart=${args.map(unitQuote).join(' ')}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=20\nKillMode=${kind === 'agent' ? 'process' : 'mixed'}\nUMask=0077\n${unitEnvironment}\n\n[Install]\nWantedBy=default.target\n`;
   return { label: name, path: join(homedir(), '.config', 'systemd', 'user', name), content };
 }
 
@@ -67,7 +83,11 @@ export function serviceCli(args: string[]): void {
     return;
   }
   const kind = values.kind as 'hub' | 'agent';
-  const dataDir = resolve(values['data-dir'] ?? join(homedir(), '.comand', kind));
+  const dataDir = resolve(
+    values['data-dir'] ??
+      (kind === 'hub' ? process.env.COMAND_DATA_DIR : undefined) ??
+      join(homedir(), '.comand', kind),
+  );
   const definition = serviceDefinition(kind, dataDir);
   if (values.print) {
     console.log(definition.content);

@@ -1,8 +1,15 @@
 #!/usr/bin/env node
-import { mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
+import {
+  mkdirSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+  realpathSync,
+} from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { resolve, join, dirname } from 'node:path';
+import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -72,14 +79,15 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   }
   if (command === 'init') {
     const current = state(dataDir);
-    if (values.host) current.config.host = values.host;
-    if (values.port) current.config.port = Number(values.port);
-    if (values['public-url']) current.config.publicUrl = values['public-url'];
+    current.config.host = values.host ?? process.env.COMAND_HOST ?? current.config.host;
+    current.config.port = Number(values.port ?? process.env.COMAND_PORT ?? current.config.port);
+    current.config.publicUrl =
+      values['public-url'] ?? process.env.COMAND_PUBLIC_URL ?? current.config.publicUrl;
     writeFileSync(join(dataDir, 'hub.json'), JSON.stringify(current.config, null, 2), {
       mode: 0o600,
     });
     console.log(
-      `Comand initialized. Settings: ${join(dataDir, 'hub.json')}\nOwner key: ${join(dataDir, 'admin.token')}\nStart: comand hub --data-dir ${JSON.stringify(dataDir)}`,
+      `Comand initialized. Settings: ${join(dataDir, 'hub.json')}\nOwner key: ${join(dataDir, 'admin.token')}\nStart from this checkout: node dist/cli.js hub --data-dir ${JSON.stringify(dataDir)}`,
     );
     return;
   }
@@ -135,6 +143,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       void stop();
     });
     await hub.start();
+    // A later service launch must use the same validated deployment settings.
+    writeFileSync(join(dataDir, 'hub.json'), JSON.stringify({ host, port, publicUrl }, null, 2), {
+      mode: 0o600,
+    });
     console.log(
       `Comand ${VERSION} listening at ${url}\nMCP endpoint: ${url}/mcp\nOwner key file: ${join(dataDir, 'admin.token')}\nAgent execution continues independently when this hub stops.`,
     );
@@ -145,7 +157,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   );
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]))
+if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1]))
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

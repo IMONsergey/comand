@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  cloneElement,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { AlertCircle, Check, Copy as CopyIcon, LoaderCircle, X, Inbox } from 'lucide-react';
 import type { JobState } from '../../src/shared/protocol';
 
@@ -99,14 +107,22 @@ export function Field({
 }: {
   label: string;
   hint?: string;
-  children: ReactNode;
+  children: ReactElement<{ id?: string; 'aria-describedby'?: string }>;
 }) {
+  const generatedId = useId();
+  const controlId = children.props.id ?? generatedId;
+  const hintId = `${generatedId}-hint`;
+  const describedBy =
+    [children.props['aria-describedby'], hint ? hintId : undefined].filter(Boolean).join(' ') ||
+    undefined;
   return (
-    <label className="field">
-      <span>{label}</span>
-      {children}
-      {hint && <small>{hint}</small>}
-    </label>
+    <div className="field">
+      <label className="field-label" htmlFor={controlId}>
+        {label}
+      </label>
+      {cloneElement(children, { id: controlId, 'aria-describedby': describedBy })}
+      {hint && <small id={hintId}>{hint}</small>}
+    </div>
   );
 }
 export function Modal({

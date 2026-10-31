@@ -48,6 +48,17 @@ The status command redacts device tokens. On Mac, service stdout/stderr are in t
 
 Keep a directly running hub on `127.0.0.1` and expose it through your existing Nginx/Caddy. Set `--public-url` to the exact HTTPS origin. If listening on a non-loopback address (such as inside Docker), an explicit HTTPS public URL is mandatory. Configure the reverse proxy to preserve the public Host header and allow request bodies of at least 5 MiB. Do not cache API, OAuth or MCP responses.
 
+Persist deployment settings before installing or restarting a hub service:
+
+```bash
+node dist/cli.js init --data-dir /absolute/hub-state --host 127.0.0.1 --port 4310 --public-url https://comand.example.com
+node dist/cli.js service install --kind hub --data-dir /absolute/hub-state
+```
+
+Stop any manually started instance before installing the service. `init` reads explicit flags first, then COMAND_HOST/COMAND_PORT/COMAND_PUBLIC_URL, then existing saved settings. A successful `hub` startup also persists its effective host, port and public URL. Service startup reads this saved configuration; shell environment overrides are not implicitly inherited. Use `init` followed by `service restart` to change a deployed hub's settings. Hub service commands also honor COMAND_DATA_DIR; agent service commands require their own explicit `--data-dir` when using a nondefault state folder.
+
+To retain an explicit browser choice for an agent service, install it with `COMAND_BROWSER_CHANNEL=chrome node dist/cli.js service install --kind agent --data-dir /absolute/agent-state`. Both launchd and systemd definitions preserve this setting. Reinstall and restart the agent service to change or clear it; reinstalling alone does not restart an already running systemd service. Only NODE_ENV, PATH and this explicitly selected browser channel are saved in the service environment.
+
 The agent opens outbound requests. No inbound port on the agent is needed. Its credentials belong to one device and can be revoked. A reconnect uses the existing durable execution ID; it is not permission to repeat a command.
 
 For a new public hostname, point DNS to the server and install a valid TLS certificate before connecting other devices. This repository does not silently modify DNS, firewall rules, existing VPN configuration or other sites.

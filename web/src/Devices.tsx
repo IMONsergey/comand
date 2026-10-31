@@ -196,9 +196,9 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
   const validFields = name.trim() && root.startsWith('/') && stateDir.startsWith('/');
   const command =
     pairing && validFields
-      ? `comand-agent pair --url ${shellQuote(window.location.origin)} --code ${shellQuote(pairing.code)} --name ${shellQuote(name.trim())} --root ${shellQuote(root)} --data-dir ${shellQuote(stateDir)}${shell ? ' --allow-shell' : ''}${browser ? ' --allow-browser' : ''}`
+      ? `node dist/agent/cli.js pair --url ${shellQuote(window.location.origin)} --code ${shellQuote(pairing.code)} --name ${shellQuote(name.trim())} --root ${shellQuote(root)} --data-dir ${shellQuote(stateDir)}${shell ? ' --allow-shell' : ''}${browser ? ' --allow-browser' : ''}`
       : '';
-  const runCommand = `comand-agent run --data-dir ${shellQuote(stateDir)}`;
+  const runCommand = `node dist/agent/cli.js run --data-dir ${shellQuote(stateDir)}`;
   return (
     <Modal
       title="Подключить устройство"
@@ -211,9 +211,8 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
         <div>
           <h3>Установите агент на компьютере</h3>
           <p>
-            На Mac или Linux установите Comand из вашего репозитория:{' '}
-            <code>npm ci && npm run build && npm link</code>. Для сборки и запуска нужен Node.js 24
-            или новее.
+            На Mac или Linux клонируйте репозиторий Comand и из папки Comand выполните:{' '}
+            <code>npm ci && npm run build</code>. Для сборки и запуска нужен Node.js 24 или новее.
           </p>
         </div>
       </div>
@@ -285,7 +284,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
       <div className="setup-step">
         <span className="step-number">3</span>
         <div>
-          <h3>Создайте код и выполните команду</h3>
+          <h3>Создайте код и выполните команду из папки Comand</h3>
           <p>Код действует 10 минут и используется один раз. Не передавайте его посторонним.</p>
         </div>
       </div>
@@ -322,7 +321,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
                 <pre>{command}</pre>
                 <Copy value={command} label="Скопировать команду" />
               </div>
-              <p className="muted small">После подключения запустите агент:</p>
+              <p className="muted small">После подключения из папки Comand запустите агент:</p>
               <div className="command-box">
                 <pre>{runCommand}</pre>
                 <Copy value={runCommand} />

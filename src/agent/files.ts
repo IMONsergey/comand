@@ -74,12 +74,10 @@ export async function executeFileOperation(
     const entries = await readdir(p, { withFileTypes: true });
     return {
       path: operation.path,
-      entries: entries
-        .slice(0, 1000)
-        .map((e) => ({
-          name: e.name,
-          type: e.isSymbolicLink() ? 'symlink' : e.isDirectory() ? 'directory' : 'file',
-        })),
+      entries: entries.slice(0, 1000).map((e) => ({
+        name: e.name,
+        type: e.isSymbolicLink() ? 'symlink' : e.isDirectory() ? 'directory' : 'file',
+      })),
       truncated: entries.length > 1000,
     };
   }

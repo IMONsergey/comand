@@ -38,6 +38,8 @@ test.beforeAll(async () => {
     allowBrowser: true,
     dataDir: join(directory, 'agent'),
   });
+  // Pairing reports the physical device path (for example /private/var on macOS).
+  projectRoot = config.roots[0]!;
   config.pollMs = 100;
   controller = new AbortController();
   runner = runAgent(config, { signal: controller.signal });

@@ -168,12 +168,10 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
         if (entry.reset < Date.now()) attempts.delete(address);
     }
     if (record.count > 30) {
-      res
-        .status(429)
-        .json({
-          error: 'Too many authentication attempts. Try again shortly.',
-          code: 'rate_limited',
-        });
+      res.status(429).json({
+        error: 'Too many authentication attempts. Try again shortly.',
+        code: 'rate_limited',
+      });
       return;
     }
     next();
@@ -338,12 +336,10 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
       'status' in error &&
       (error.status === 400 || error.status === 413)
     ) {
-      res
-        .status(error.status as number)
-        .json({
-          error: error.status === 413 ? 'Request body is too large' : 'Invalid JSON request',
-          code: 'invalid_request',
-        });
+      res.status(error.status as number).json({
+        error: error.status === 413 ? 'Request body is too large' : 'Invalid JSON request',
+        code: 'invalid_request',
+      });
       return;
     }
     console.error('Hub request failed', error);

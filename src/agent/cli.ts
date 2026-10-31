@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { homedir } from 'node:os';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pairDevice, runAgent, agentStatus, resolveJob, loadConfig, syncJobs } from './index.js';
@@ -37,7 +38,7 @@ export async function agentCli(args = process.argv.slice(2)) {
       dataDir,
     });
     console.log(
-      `Paired ${config.name} (${config.deviceId}). Run comand-agent run --data-dir ${JSON.stringify(dataDir)}`,
+      `Paired ${config.name} (${config.deviceId}). Run from this checkout: node dist/agent/cli.js run --data-dir ${JSON.stringify(dataDir)}`,
     );
     if (config.allowShell)
       console.log(
@@ -65,7 +66,7 @@ export async function agentCli(args = process.argv.slice(2)) {
       'Usage: comand-agent pair --url URL --code CODE --name NAME --root PATH [--root PATH] [--allow-shell] [--allow-browser] [--data-dir PATH]\n       comand-agent run|status [--data-dir PATH]\n       comand-agent resolve --job ID --acknowledge [--data-dir PATH]',
     );
 }
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]))
+if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1]))
   agentCli().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

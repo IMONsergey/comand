@@ -5,6 +5,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { HubStore } from '../src/hub/store.js';
+import { createMcpServer } from '../src/mcp/tools.js';
+import type { Job, Operation } from '../src/shared/protocol.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createHub } from '../src/hub/server.js';
 import { installMcp } from '../src/mcp/http.js';
@@ -212,4 +216,93 @@ test('OAuth HTTP consent, PKCE token exchange and read-only MCP scope work toget
     200,
   );
   await assert.rejects(client.callTool({ name: 'list_devices', arguments: {} }));
+});
+
+test('get_job emits browser JPEG as image without duplicating base64 in metadata', async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'comand-mcp-image-'));
+  const store = new HubStore(dataDir, randomBytes(32).toString('base64url'));
+  const client = new Client({ name: 'image-result-test', version: '1' });
+  const server = createMcpServer(store);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  t.after(async () => {
+    await client.close();
+    await server.close();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  const device = store.enroll({
+    pairingCode: store.createPairing().code,
+    name: 'Browser fixture',
+    platform: 'linux',
+    roots: [dataDir],
+    allowShell: false,
+    allowBrowser: true,
+    version: '0.1.0',
+  });
+  const project = store.createProject({
+    deviceId: device.deviceId,
+    name: 'Screenshot',
+    root: dataDir,
+  });
+  function finish(operation: Operation, value: unknown): Job {
+    const job = store.createJob({
+      projectId: project.id,
+      operation,
+      idempotencyKey: randomBytes(16).toString('hex'),
+    });
+    store.poll(device.deviceId);
+    store.updateJob(device.deviceId, { jobId: job.id, status: 'succeeded', result: value });
+    return store.getJob(job.id)!;
+  }
+  // A real one-pixel JPEG, encoded once as image content only.
+  const screenshot =
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3iiiigD//2Q==';
+  const operation: Operation = {
+    kind: 'browser.inspect',
+    url: 'https://example.com',
+    width: 1440,
+    height: 1000,
+    screenshot: true,
+  };
+  const metadata = {
+    url: 'https://example.com',
+    title: 'Example',
+    text: 'Visible page text',
+    screenshotMime: 'image/jpeg',
+  };
+  const job = finish(operation, { ...metadata, screenshot });
+  const response = await client.callTool({ name: 'get_job', arguments: { jobId: job.id } });
+  assert.notEqual(response.isError, true);
+  assert.ok(Array.isArray(response.content));
+  const images = response.content.filter((block) => block.type === 'image');
+  assert.equal(images.length, 1);
+  assert.deepEqual(images[0], { type: 'image', mimeType: 'image/jpeg', data: screenshot });
+  const expected = { ...job, result: metadata };
+  assert.deepEqual(response.structuredContent, expected);
+  const text = response.content.find((block) => block.type === 'text');
+  assert.ok(text && text.type === 'text');
+  assert.deepEqual(JSON.parse(text.text), expected);
+  assert.ok(!text.text.includes(screenshot));
+  assert.deepEqual(store.getJob(job.id), job, 'MCP formatting must not alter persisted results');
+
+  for (const [candidateOperation, candidateResult] of [
+    [
+      { kind: 'files.read', path: 'page.json', offset: 0, limit: 65536 },
+      { content: screenshot, screenshot, screenshotMime: 'image/jpeg' },
+    ],
+    [operation, { ...metadata, screenshot: 'invalid base64!' }],
+    [operation, { ...metadata, screenshot: Buffer.from('not a JPEG').toString('base64') }],
+    [operation, { ...metadata, screenshot, screenshotMime: 'text/html' }],
+  ] as Array<[Operation, unknown]>) {
+    const original = finish(candidateOperation, candidateResult);
+    const unchanged = await client.callTool({ name: 'get_job', arguments: { jobId: original.id } });
+    assert.ok(Array.isArray(unchanged.content));
+    assert.equal(unchanged.content.filter((block) => block.type === 'image').length, 0);
+    assert.deepEqual(unchanged.structuredContent, original);
+    const originalText = unchanged.content.find((block) => block.type === 'text');
+    assert.ok(originalText && originalText.type === 'text');
+    assert.deepEqual(JSON.parse(originalText.text), original);
+  }
 });

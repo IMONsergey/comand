@@ -174,24 +174,20 @@ export function installMcp(hub: HubRuntime, options: { dataDir: string; publicUr
       await transport.handleRequest(req, res, req.body);
     } catch {
       if (!res.headersSent)
-        res
-          .status(500)
-          .json({
-            jsonrpc: '2.0',
-            id: null,
-            error: { code: -32603, message: 'MCP request failed' },
-          });
+        res.status(500).json({
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32603, message: 'MCP request failed' },
+        });
     }
   });
   app.all('/mcp', (_req, res) => {
     res.setHeader('Allow', 'POST');
-    res
-      .status(405)
-      .json({
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32000, message: 'Use POST for stateless MCP' },
-      });
+    res.status(405).json({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32000, message: 'Use POST for stateless MCP' },
+    });
   });
   return { provider, close: () => provider.close() };
 }

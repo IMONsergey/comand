@@ -2415,3 +2415,12 @@ select {
     padding: 16px 17px 0;
   }
 }
+.field > .field-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+@media (max-width: 767px) {
+  .field > .field-label {
+    font-size: 11px;
+  }
+}
