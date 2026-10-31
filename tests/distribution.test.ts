@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, utimes, readlink, unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, utimes, readlink, unlink, stat } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -180,6 +180,71 @@ test('installer pairs with literal arguments in paths with spaces, starts servic
   assert.notEqual(unsafeMarker.code, 0);
   assert.match(unsafeMarker.stderr, /Некорректный маркер/);
   assert.equal(await readFile(path.join(f.data, 'config.json'), 'utf8'), initial);
+});
+
+test('minimal installer command creates only the default workspace, uses hostname and preserves existing pairing', { timeout: 30_000 }, async (t) => {
+  const f = await fixture(t);
+  const home = path.join(f.directory, "home with spaces $(printf injected) & '");
+  await mkdir(home);
+  const env = { ...f.env, HOME: home, HOSTNAME: 'untrusted-environment-name' };
+  const args = ['--url', f.origin, '--code', 'single-use-fixture-secret', '--allow-shell'];
+  const installed = await command([installer, ...args], env);
+  assert.equal(installed.code, 0, installed.stderr + installed.stdout);
+  const workspace = path.join(home, 'Comand');
+  const state = path.join(home, '.comand', 'agent');
+  const program = path.join(home, '.local', 'share', 'comand');
+  const initial = await readFile(path.join(state, 'config.json'), 'utf8');
+  const config = JSON.parse(initial);
+  const passed: string[] = config.arguments;
+  assert.equal(passed[passed.indexOf('--name') + 1], hostname().slice(0, 100));
+  assert.ok(passed[passed.indexOf('--name') + 1]!.length <= 100);
+  assert.doesNotMatch(passed[passed.indexOf('--name') + 1]!, /[\x00-\x1f\x7f-\x9f]/);
+  assert.equal(passed.filter(value => value === '--root').length, 1);
+  assert.equal(passed[passed.indexOf('--root') + 1], workspace);
+  assert.ok(!passed.includes(home), 'the home directory is not an approved root');
+  assert.ok(passed.includes('--allow-shell'));
+  for (const directory of [workspace, state, program]) assert.equal((await stat(directory)).mode & 0o777, 0o700);
+  assert.equal((await stat(path.join(state, 'config.json'))).mode & 0o777, 0o600);
+  const beforeRepeat = f.requests.length;
+  await rm(workspace, { recursive: true });
+  const repeated = await command([installer, ...args], env);
+  assert.notEqual(repeated.code, 0);
+  assert.match(repeated.stderr, /уже подключён/);
+  assert.equal(f.requests.length, beforeRepeat);
+  assert.equal(await readFile(path.join(state, 'config.json'), 'utf8'), initial);
+  await assert.rejects(stat(workspace), /ENOENT/, 're-pair refusal does not create a workspace');
+  for (const option of [['--name', 'new name'], ['--root', f.root], ['--code', 'another-code'], ['--allow-shell']]) {
+    const rejected = await command([installer, '--url', f.origin, '--update', ...option], env);
+    assert.notEqual(rejected.code, 0);
+    assert.match(rejected.stderr, /При обновлении не передавайте/);
+    assert.equal(f.requests.length, beforeRepeat);
+  }
+  const updated = await command([installer, '--url', f.origin, '--update'], env);
+  assert.equal(updated.code, 0, updated.stderr + updated.stdout);
+  assert.equal(await readFile(path.join(state, 'config.json'), 'utf8'), initial);
+  await assert.rejects(stat(workspace), /ENOENT/, 'update does not generate enrollment defaults');
+});
+
+test('default workspace rejects symlinks and missing custom roots are never created', { timeout: 15_000 }, async (t) => {
+  const f = await fixture(t);
+  const home = path.join(f.directory, 'isolated-home');
+  await mkdir(home);
+  await writeFile(path.join(home, 'sentinel'), 'untouched');
+  await symlink(home, path.join(home, 'Comand'));
+  const env = { ...f.env, HOME: home };
+  const args = ['--url', f.origin, '--code', 'single-use-fixture-secret', '--allow-shell'];
+  const symlinked = await command([installer, ...args], env);
+  assert.notEqual(symlinked.code, 0);
+  assert.match(symlinked.stderr, /не должна быть символической ссылкой/);
+  assert.equal(f.requests.length, 0);
+  assert.equal(await readFile(path.join(home, 'sentinel'), 'utf8'), 'untouched');
+  await unlink(path.join(home, 'Comand'));
+  const custom = path.join(home, 'custom-missing');
+  const missing = await command([installer, ...args, '--root', custom], env);
+  assert.notEqual(missing.code, 0);
+  assert.match(missing.stderr, /Рабочая папка не существует/);
+  assert.equal(f.requests.length, 0);
+  for (const directory of [custom, path.join(home, 'Comand'), path.join(home, '.comand')]) await assert.rejects(stat(directory), /ENOENT/);
 });
 
 test('checksum or traversal failure leaves credentials absent and does not publish a current release', { timeout: 30_000 }, async (t) => {

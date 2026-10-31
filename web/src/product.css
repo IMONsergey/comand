@@ -1187,3 +1187,217 @@ textarea {
   place-items: center;
   border-radius: 7px;
 }
+
+/* One command is the primary connection path; optional configuration stays closed. */
+.modal:has(.pair-connect) {
+  width: 680px;
+}
+.pair-permission {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.65;
+  margin-bottom: 18px;
+}
+.pair-permission > svg {
+  margin-top: 3px;
+  color: var(--accent-deep);
+}
+.pair-permission code {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.pair-install-command {
+  border: 1px solid #30343a;
+  border-radius: 8px;
+  background: #15171b;
+  padding: 18px;
+}
+.pair-command-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a7afb9;
+  font:
+    10px 'IBM Plex Mono',
+    monospace;
+  letter-spacing: 0.65px;
+  margin-bottom: 15px;
+}
+.pair-install-command pre {
+  font-size: 12px;
+  line-height: 1.75;
+  color: #e5e9ee;
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+  user-select: all;
+}
+.pair-install-command .copy-button {
+  background: var(--action-fill);
+  color: white;
+  border-color: var(--action-fill);
+  margin-top: 18px;
+  width: 100%;
+  min-height: 44px;
+}
+.pair-install-command .copy-button:hover {
+  background: var(--action-hover-fill);
+  border-color: var(--action-hover-fill);
+}
+.pair-defaults {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.65;
+  margin-top: 14px;
+}
+.pair-waiting {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding-block: 21px;
+  color: var(--muted);
+}
+.pair-waiting > svg {
+  color: var(--secondary);
+}
+.pair-waiting > div {
+  flex: 1;
+  min-width: 0;
+}
+.pair-waiting strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 500;
+  color: var(--ink);
+}
+.pair-waiting span {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.pair-waiting > small {
+  align-self: flex-start;
+  font:
+    11px 'IBM Plex Mono',
+    monospace;
+  padding-top: 4px;
+}
+.pair-advanced {
+  border-top: 1px solid var(--line);
+}
+.pair-advanced summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-block: 17px;
+  font-size: 13px;
+  color: var(--secondary);
+  cursor: pointer;
+  list-style: none;
+}
+.pair-advanced summary::-webkit-details-marker {
+  display: none;
+}
+.pair-advanced summary > svg {
+  transition: transform 180ms var(--ease);
+}
+.pair-advanced[open] summary > svg {
+  transform: rotate(180deg);
+}
+.pair-advanced-body {
+  padding-top: 4px;
+}
+.pair-advanced-body > p {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+.pair-advanced-body [aria-invalid='true'] {
+  border-color: var(--danger);
+}
+.pair-advanced-body .checkbox:last-child {
+  margin-bottom: 5px;
+}
+.pair-local-note {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.65;
+  border-top: 1px solid var(--line);
+  padding-top: 15px;
+}
+.pair-loading {
+  display: grid;
+  place-items: center;
+  padding: 45px 10px;
+  color: var(--muted);
+}
+.pair-expired {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 24px;
+  margin-bottom: 20px;
+  background: var(--surface-soft);
+}
+.pair-expired p {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 10px 0 19px;
+}
+.pair-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 25px 0 15px;
+}
+.pair-success-icon {
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: #edf6f0;
+  color: #32684a;
+  margin-bottom: 22px;
+}
+:root[data-theme='dark'] .pair-success-icon {
+  background: #1e3529;
+  color: #9cd2b1;
+}
+.pair-success h3 {
+  font-size: 23px;
+  letter-spacing: -0.6px;
+}
+.pair-success p {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 12px 0 26px;
+  overflow-wrap: anywhere;
+}
+.pair-success .button {
+  min-width: 150px;
+}
+@media (max-width: 767px) {
+  .pair-install-command {
+    padding: 15px;
+  }
+  .pair-install-command pre {
+    font-size: 11px;
+    max-height: 164px;
+  }
+  .pair-permission {
+    font-size: 13px;
+    gap: 8px;
+  }
+  .pair-waiting {
+    gap: 9px;
+  }
+  .pair-waiting strong {
+    font-size: 12px;
+  }
+}

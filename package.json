@@ -1,8 +1,8 @@
 {
   "name": "comand",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
-  "description": "Your computers, projects and durable jobs \u2014 controlled from chat.",
+  "description": "Your computers, projects and durable jobs — controlled from chat.",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"

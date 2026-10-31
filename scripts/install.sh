@@ -8,11 +8,12 @@ fail() { printf 'Comand: %s\n' "$*" >&2; exit 1; }
 usage() {
   cat <<'HELP'
 Comand — установка агента без Git, npm и sudo.
-bash install.sh --url https://comand.example --code CODE --name NAME \
-  --root /absolute/project [--root /another/project] [--allow-shell] [--allow-browser]
+bash install.sh --url https://comand.example --code CODE [--allow-shell] [--allow-browser]
+  [--name NAME] [--root /absolute/project] [--root /another/project]
   [--data-dir /absolute/state] [--install-dir /absolute/program] [--no-service]
 bash install.sh --update --url https://comand.example [--data-dir /absolute/state]
   [--install-dir /absolute/program] [--no-service]
+Имя компьютера определяется автоматически. Рабочая папка по умолчанию: ~/Comand.
 Существующие учётные данные сохраняются. Обновление не требует нового кода.
 HELP
 }
@@ -26,6 +27,7 @@ data_dir="${HOME:?HOME is required}/.comand/agent"
 install_dir="$HOME/.local/share/comand"
 update=0
 no_service=0
+default_root=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
@@ -47,6 +49,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "$update" -eq 0 ] && [ "${#roots[@]}" -eq 0 ]; then
+  roots=("$HOME/Comand")
+  default_root=1
+fi
+
 # Accept an origin only; credentials, paths, queries and fragments cannot reach curl.
 https_origin='^https://([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?/?$'
 loopback_origin='^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?/?$'
@@ -61,11 +68,18 @@ if [ "$update" -eq 1 ]; then
   [ -z "$pair_code" ] && [ -z "$device_name" ] && [ "${#roots[@]}" -eq 0 ] && [ "${#capabilities[@]}" -eq 0 ] || fail 'При обновлении не передавайте код, имя, папки и разрешения: они сохраняются.'
   [ -f "$data_dir/config.json" ] && [ ! -L "$data_dir/config.json" ] || fail 'Для обновления нужна существующая конфигурация агента.'
 else
-  [ -n "$pair_code" ] && [ -n "$device_name" ] && [ "${#roots[@]}" -gt 0 ] || fail 'Для подключения нужны --code, --name и хотя бы один --root.'
+  [ -n "$pair_code" ] || fail 'Для подключения нужен --code.'
   [ ! -e "$data_dir/config.json" ] && [ ! -L "$data_dir/config.json" ] || fail 'Этот агент уже подключён. Используйте --update или другую --data-dir; ключ не изменён.'
 fi
 for directory in "${roots[@]}"; do
-  [ -d "$directory" ] || fail 'Рабочая папка не существует. Создайте её и повторите установку.'
+  if [ "$default_root" -eq 1 ]; then
+    [ ! -L "$directory" ] || fail 'Папка ~/Comand не должна быть символической ссылкой. Выберите другую рабочую папку через --root.'
+    if [ -e "$directory" ]; then
+      [ -d "$directory" ] && [ -O "$directory" ] || fail 'Папка ~/Comand должна принадлежать текущему пользователю.'
+    fi
+  else
+    [ -d "$directory" ] || fail 'Рабочая папка не существует. Создайте её и повторите установку.'
+  fi
 done
 for executable in curl tar gzip mktemp shasum; do
   command -v "$executable" >/dev/null 2>&1 || {
@@ -162,10 +176,10 @@ fi
 node_exec=$("$node_exec" -p 'require("node:fs").realpathSync(process.execPath)')
 
 # Resolve paths once and reject overlapping runtime/state before downloading code.
-"$node_exec" - "$install_dir" "$data_dir" "$hub_url" "$update" <<'VALIDATE'
+"$node_exec" - "$install_dir" "$data_dir" "$hub_url" "$update" "$default_root" "$HOME" <<'VALIDATE'
 const fs = require('node:fs');
 const path = require('node:path');
-const [install, data, rawUrl, update] = process.argv.slice(2);
+const [install, data, rawUrl, update, defaultRoot, home] = process.argv.slice(2);
 const a = fs.realpathSync(install), b = fs.realpathSync(data), url = new URL(rawUrl);
 if (a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)) throw Error('Папки программы и состояния должны быть раздельными.');
 if (url.origin !== rawUrl) throw Error('Нужен нормализованный origin сервера.');
@@ -173,7 +187,20 @@ if (update === '1') {
   const config = JSON.parse(fs.readFileSync(path.join(b, 'config.json'), 'utf8'));
   if (config.hubUrl.replace(/\/$/, '') !== rawUrl) throw Error('Обновляйте агент с адреса его существующего сервера.');
 } else if (fs.existsSync(path.join(b, 'config.json'))) throw Error('Агент уже подключён; ключ не изменён.');
+if (defaultRoot === '1') {
+  const workspace = path.join(fs.realpathSync(home), 'Comand');
+  for (const directory of [a, b]) {
+    if (workspace === directory || workspace.startsWith(directory + path.sep) || directory.startsWith(workspace + path.sep)) throw Error('Рабочая папка ~/Comand должна быть отделена от программы и состояния.');
+  }
+  try { fs.mkdirSync(workspace, { mode: 0o700 }); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  const stat = fs.lstatSync(workspace);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('Папка ~/Comand должна быть обычной папкой текущего пользователя.');
+}
 VALIDATE
+if [ "$update" -eq 0 ] && [ -z "$device_name" ]; then
+  device_name=$("$node_exec" -p 'const name = require("node:os").hostname().replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim(); ((name && !name.startsWith("--")) ? name : "Comand computer").slice(0, 100)')
+fi
 install_dir=$(cd "$install_dir" && pwd -P)
 data_dir=$(cd "$data_dir" && pwd -P)
 printf 'Загрузка и проверка Comand…\n'
@@ -228,6 +255,9 @@ else
 fi
 if [ "$update" -eq 0 ]; then
   [ ! -e "$data_dir/config.json" ] && [ ! -L "$data_dir/config.json" ] || fail 'Агент уже подключён; ключ не изменён.'
+  if [ "$default_root" -eq 1 ]; then
+    [ ! -L "$HOME/Comand" ] && [ -d "$HOME/Comand" ] && [ -O "$HOME/Comand" ] || fail 'Папка ~/Comand изменилась во время установки. Проверьте её и повторите подключение.'
+  fi
   pair_args=(pair --url "$hub_url" --code "$pair_code" --name "$device_name" --data-dir "$data_dir")
   for directory in "${roots[@]}"; do pair_args+=(--root "$directory"); done
   "$node_exec" "$release_dir/dist/agent/cli.js" "${pair_args[@]}" "${capabilities[@]}"

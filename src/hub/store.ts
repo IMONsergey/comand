@@ -16,6 +16,7 @@ import {
   type JobUpdate,
   type LogChunk,
   type Pairing,
+  type PairingStatus,
   type PollResponse,
   type Project,
 } from '../shared/protocol.js';
@@ -137,6 +138,8 @@ export class HubStore {
    CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,token_hash TEXT UNIQUE NOT NULL,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS pairings(code_hash TEXT PRIMARY KEY,expires_at TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS pairing_status(id TEXT PRIMARY KEY,code_hash TEXT UNIQUE NOT NULL,expires_at TEXT NOT NULL,device_id TEXT REFERENCES devices(id));
+   CREATE INDEX IF NOT EXISTS pairing_status_expiry ON pairing_status(expires_at);
    CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,device_id TEXT NOT NULL,idempotency_key TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,logs BLOB NOT NULL DEFAULT X'');
    CREATE UNIQUE INDEX IF NOT EXISTS one_active_project ON jobs(project_id) WHERE status IN ('queued','dispatched','running','uncertain');`);
@@ -222,11 +225,36 @@ export class HubStore {
     return d && !d.revokedAt ? d.id : null;
   }
   createPairing(): Pairing {
-    this.db.prepare('DELETE FROM pairings WHERE expires_at < ?').run(now());
-    const code = randomBytes(18).toString('base64url');
-    const expiresAt = new Date(Date.now() + 600000).toISOString();
-    this.db.prepare('INSERT INTO pairings VALUES(?,?)').run(hashToken(code), expiresAt);
-    return { code, expiresAt };
+    return this.transaction(() => {
+      this.db.prepare('DELETE FROM pairings WHERE expires_at < ?').run(now());
+      this.db
+        .prepare('DELETE FROM pairing_status WHERE expires_at < ?')
+        .run(this.pairingStatusCutoff());
+      const id = randomUUID();
+      const code = randomBytes(18).toString('base64url');
+      const expiresAt = new Date(Date.now() + 600000).toISOString();
+      const codeHash = hashToken(code);
+      this.db.prepare('INSERT INTO pairings VALUES(?,?)').run(codeHash, expiresAt);
+      this.db
+        .prepare('INSERT INTO pairing_status(id,code_hash,expires_at) VALUES(?,?,?)')
+        .run(id, codeHash, expiresAt);
+      return { id, code, expiresAt };
+    });
+  }
+  private pairingStatusCutoff(): string {
+    // Let an open installation screen observe expiry/completion for a day, then discard receipts.
+    return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  }
+  getPairingStatus(id: string): PairingStatus {
+    const row = this.db
+      .prepare('SELECT expires_at,device_id FROM pairing_status WHERE id=? AND expires_at>=?')
+      .get(id, this.pairingStatusCutoff()) as
+      { expires_at: string; device_id: string | null } | undefined;
+    if (!row) throw new HubError(404, 'Pairing not found', 'not_found');
+    return {
+      expiresAt: row.expires_at,
+      device: row.device_id ? (this.getDevice(row.device_id) ?? null) : null,
+    };
   }
   enroll(input: AgentEnrollment): AgentCredentials {
     const value = parse(enrollmentSchema, input);
@@ -258,6 +286,11 @@ export class HubStore {
       this.db
         .prepare('INSERT INTO devices VALUES(?,?,?)')
         .run(id, hashToken(token), JSON.stringify(device));
+      // Device creation, receipt completion and secret consumption commit together.
+      // Codes created by older releases have no receipt and remain valid for enrollment.
+      this.db
+        .prepare('UPDATE pairing_status SET device_id=? WHERE code_hash=?')
+        .run(id, hashToken(value.pairingCode));
       this.db.prepare('DELETE FROM pairings WHERE code_hash=?').run(hashToken(value.pairingCode));
       return { deviceId: id, token };
     });

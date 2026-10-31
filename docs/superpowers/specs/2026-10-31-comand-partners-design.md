@@ -16,8 +16,12 @@ Installation: a reproducible versioned agent archive and checksum, HTTPS install
 
 Testing: existing durability suite plus separate-user REST and MCP isolation, cross-user ID probes, pairing ownership, OAuth refresh/revocation/restart, signup duplicates/validation/concurrency, login/recovery/session restart/CSRF. Browser tests exercise signup, recovery-code acknowledgment, logout/login, empty state/onboarding and existing command/file flows at desktop/mobile; inspect real screenshots. Smoke installer/service on available Mac and Linux with isolated test roots, preserve live services until release passes.
 
-Deployment: inspect actual public DNS/TLS/proxy/service state, backup application state before upgrade, publish a tested commit and matching archive, update only Comand services. Verify public endpoints and real commands on both devices. Explicitly distinguish official MCP client tests from successful account-level ChatGPT connection. Compare DC features truthfully: missing interactive REPL, native GUI and rich document tools cannot be claimed supported.
+Deployment: inspect actual public DNS/TLS/proxy/service state, backup application state before upgrade, publish a tested commit and matching archive, update only Comand services. Verify public endpoints and real commands on both devices. Explicitly distinguish official MCP client tests from successful account-level ChatGPT connection. Compare DC features truthfully: missing full PTY, native GUI and rich document tools cannot be claimed supported.
 
 ## Alternatives
 
 Shared tables with tenant IDs require invasive changes to all durability queries and are easier to get wrong here. Separate full processes per partner complicate deployment. Separate SQLite stores behind one authenticated hub keep the tested job core and give structural data separation; this is the chosen builder decision. No shared team devices/roles until explicitly designed.
+
+## Installation simplification requested during delivery
+
+The device dialog immediately presents one copyable command. Hostname and private agent state use local defaults; the installer creates only `~/Comand` when no custom root is specified. Optional paths and permission switches stay in Advanced. Shell access is explicitly described beside the command. The UI polls an authenticated, account-scoped pairing receipt and only reports success after that exact device polls online. It never guesses completion from a device name or an unrelated enrollment.

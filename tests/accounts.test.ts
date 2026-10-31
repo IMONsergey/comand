@@ -865,3 +865,172 @@ test('version heartbeats refresh only the authenticated device, validate before 
   );
   assert.equal(deviceState().version, VERSION, 'Revoked credentials cannot update device metadata');
 });
+
+test('pairing status follows the exact enrolled device through heartbeat and restart without exposing secrets', async (t) => {
+  const f = await fixture(t);
+  const a = await f.register('pairing-a@example.com'),
+    b = await f.register('pairing-b@example.com');
+  const create = async (session: Login) =>
+    (await (await f.request('/api/pairings', {}, session)).json()) as Pairing;
+  const first = await create(a),
+    second = await create(a),
+    other = await create(b);
+  assert.match(first.id, /^[a-f0-9-]{36}$/);
+  assert.notEqual(first.id, first.code);
+  assert.notEqual(first.id, second.id);
+  const status = (pair: Pairing, session = a) =>
+    f.request(`/api/pairings/${pair.id}`, undefined, session);
+  assert.deepEqual(await (await status(first)).json(), {
+    expiresAt: first.expiresAt,
+    device: null,
+  });
+  assert.equal((await f.request(`/api/pairings/${first.id}`)).status, 401);
+  assert.equal((await status(first, b)).status, 404);
+  assert.equal((await status(other, a)).status, 404);
+  assert.equal((await f.request(`/api/pairings/${first.code}`, undefined, a)).status, 404);
+  const enrollment = {
+    name: 'Automatic computer',
+    platform: 'linux',
+    roots: ['/work'],
+    allowShell: true,
+    allowBrowser: false,
+    version: '0.2.0',
+  };
+  for (const pairingCode of [first.id, 'a-valid-length-wrong-code']) {
+    assert.equal(
+      (await f.request('/api/agent/enroll', { ...enrollment, pairingCode })).status,
+      401,
+    );
+    assert.deepEqual(await (await status(first)).json(), {
+      expiresAt: first.expiresAt,
+      device: null,
+    });
+  }
+  const attempts = await Promise.all(
+    [1, 2].map(() => f.request('/api/agent/enroll', { ...enrollment, pairingCode: second.code })),
+  );
+  assert.deepEqual(attempts.map((r) => r.status).sort(), [201, 401]);
+  const device = (await attempts.find((r) => r.status === 201)!.json()) as AgentCredentials;
+  const enrolled = (await (
+    await status(second)
+  ).json()) as import('../src/shared/protocol.js').PairingStatus;
+  assert.equal(enrolled.device?.id, device.deviceId);
+  assert.equal(enrolled.device?.online, false, 'Enrollment alone is not a running agent');
+  assert.equal(enrolled.expiresAt, second.expiresAt);
+  assert.deepEqual(Object.keys(enrolled).sort(), ['device', 'expiresAt']);
+  for (const secret of [second.code, device.token, 'token_hash', 'code_hash'])
+    assert.ok(!JSON.stringify(enrolled).includes(secret));
+  assert.deepEqual(
+    await (await status(first)).json(),
+    { expiresAt: first.expiresAt, device: null },
+    'Another installation must not complete this pairing',
+  );
+  assert.equal((await f.request('/api/agent/poll', {}, device.token)).status, 200);
+  assert.equal(
+    ((await (await status(second)).json()) as import('../src/shared/protocol.js').PairingStatus)
+      .device?.online,
+    true,
+  );
+  await f.restart();
+  const restored = (await (
+    await status(second)
+  ).json()) as import('../src/shared/protocol.js').PairingStatus;
+  assert.equal(restored.device?.id, device.deviceId);
+  assert.equal(restored.device?.online, true);
+  assert.deepEqual(await (await status(first)).json(), {
+    expiresAt: first.expiresAt,
+    device: null,
+  });
+  assert.equal(
+    (await f.request('/api/agent/enroll', { ...enrollment, pairingCode: second.code })).status,
+    401,
+  );
+  assert.equal((await f.request(`/api/devices/${device.deviceId}/revoke`, {}, a)).status, 200);
+  assert.equal(
+    ((await (await status(second)).json()) as import('../src/shared/protocol.js').PairingStatus)
+      .device?.online,
+    false,
+  );
+});
+
+test('pairing receipts expire after retention, preserve old codes and commit atomically with enrollment', async (t) => {
+  const f = await fixture(t);
+  const pair = f.hub.store.createPairing();
+  const enrollment = {
+    pairingCode: pair.code,
+    name: 'Receipt transaction',
+    platform: 'linux' as const,
+    roots: ['/work'],
+    allowShell: false,
+    allowBrowser: false,
+    version: '0.2.0',
+  };
+  const db = new DatabaseSync(join(f.dataDir, 'hub.sqlite'));
+  try {
+    db.exec(
+      "CREATE TRIGGER reject_receipt BEFORE UPDATE ON pairing_status BEGIN SELECT RAISE(ABORT, 'simulated receipt write failure'); END;",
+    );
+    assert.throws(() => f.hub.store.enroll(enrollment), /simulated receipt write failure/);
+    assert.deepEqual(
+      f.hub.store.listDevices(),
+      [],
+      'A failed receipt update must roll back device creation',
+    );
+    assert.deepEqual(f.hub.store.getPairingStatus(pair.id), {
+      expiresAt: pair.expiresAt,
+      device: null,
+    });
+    db.exec('DROP TRIGGER reject_receipt');
+    const device = f.hub.store.enroll(enrollment);
+    assert.equal(
+      f.hub.store.getPairingStatus(pair.id).device?.id,
+      device.deviceId,
+      'Failed enrollment must leave the code usable',
+    );
+    assert.throws(() => f.hub.store.enroll(enrollment), /Invalid or expired pairing code/);
+
+    const expired = f.hub.store.createPairing();
+    const expiry = new Date(Date.now() - 60_000).toISOString();
+    db.prepare('UPDATE pairings SET expires_at=? WHERE code_hash=?').run(
+      expiry,
+      createHash('sha256').update(expired.code).digest('hex'),
+    );
+    db.prepare('UPDATE pairing_status SET expires_at=? WHERE id=?').run(expiry, expired.id);
+    const expiredStatus = await f.request(`/api/pairings/${expired.id}`, undefined, f.adminToken);
+    assert.equal(expiredStatus.status, 200);
+    assert.deepEqual(await expiredStatus.json(), { expiresAt: expiry, device: null });
+    assert.equal(
+      (await f.request('/api/agent/enroll', { ...enrollment, pairingCode: expired.code })).status,
+      401,
+    );
+    const retentionPast = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    db.prepare('UPDATE pairing_status SET expires_at=? WHERE id=?').run(retentionPast, expired.id);
+    assert.equal(
+      (await f.request(`/api/pairings/${expired.id}`, undefined, f.adminToken)).status,
+      404,
+    );
+    f.hub.store.createPairing();
+    assert.equal(
+      db.prepare('SELECT id FROM pairing_status WHERE id=?').get(expired.id),
+      undefined,
+      'Issuing a new pairing cleans old receipts',
+    );
+
+    // A pre-upgrade two-column pairing has no receipt but remains enrollable.
+    const oldCode = randomBytes(18).toString('base64url');
+    db.prepare('INSERT INTO pairings(code_hash,expires_at) VALUES(?,?)').run(
+      createHash('sha256').update(oldCode).digest('hex'),
+      new Date(Date.now() + 60_000).toISOString(),
+    );
+    assert.equal(
+      (await f.request('/api/agent/enroll', { ...enrollment, pairingCode: oldCode })).status,
+      201,
+    );
+    assert.equal(
+      (await f.request('/api/agent/enroll', { ...enrollment, pairingCode: oldCode })).status,
+      401,
+    );
+  } finally {
+    db.close();
+  }
+});

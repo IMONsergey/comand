@@ -9,12 +9,15 @@ import { fileURLToPath } from 'node:url';
 import { createHub } from '../dist/hub/server.js';
 import { serviceDefinition } from '../dist/service.js';
 
-const { values } = parseArgs({ options: { 'release-dir': { type: 'string' }, help: { type: 'boolean' } } });
+const { values } = parseArgs({ options: { 'release-dir': { type: 'string' }, 'bootstrap-node': { type: 'boolean' }, help: { type: 'boolean' } } });
 if (values.help) {
-  console.log('node scripts/native-smoke.mjs --release-dir /absolute/packaged-release-directory\nRun as a normal logged-in macOS/Linux user with an active launchd/systemd user manager.');
+  console.log('node scripts/native-smoke.mjs --release-dir /absolute/packaged-release-directory [--bootstrap-node]\nRun as a normal logged-in macOS/Linux user with an active launchd/systemd user manager.\n--bootstrap-node restricts only the installer PATH to /usr/bin:/bin:/usr/sbin:/sbin and requires that PATH to contain no Node.js 24. It verifies an actual downloaded private Node.js 24.22.1 runtime.');
   process.exit(0);
 }
 const started = Date.now();
+const bootstrapNode = Boolean(values['bootstrap-node']);
+const bootstrapPath = '/usr/bin:/bin:/usr/sbin:/sbin';
+const workBudget = bootstrapNode ? 110_000 : 70_000;
 let step = 'preflight';
 let directory, hub, definition, dataDir, installDir, jobId, serviceAttempted = false;
 let cleaning = false, interrupted = false;
@@ -22,12 +25,13 @@ const children = new Set();
 const captured = [];
 const secrets = new Set();
 const report = { ok: false, platform: process.platform, arch: process.arch, node: process.version };
+if (bootstrapNode) Object.assign(report, { bootstrapNode: true, downloadedRuntime: false });
 const exists = async file => { try { await lstat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 function budget(requested) {
   if (interrupted && !cleaning) throw Error('Smoke check interrupted');
-  const remaining = started + (cleaning ? 90_000 : 70_000) - Date.now();
+  const remaining = started + workBudget + (cleaning ? 20_000 : 0) - Date.now();
   if (remaining <= 0) throw Error('Smoke check deadline exceeded');
   return Math.min(requested, remaining);
 }
@@ -38,12 +42,12 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
   interrupted = true;
   for (const child of children) stop(child, 'SIGTERM');
 });
-async function run(executable, args, maximum = 20_000) {
+async function run(executable, args, maximum = 20_000, commandPath) {
   const timeout = budget(maximum);
   return await new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH ?? '/usr/bin:/bin'}` },
+      env: { ...process.env, PATH: commandPath ?? `${path.dirname(process.execPath)}:${process.env.PATH ?? '/usr/bin:/bin'}` },
       detached: true,
     });
     children.add(child);
@@ -115,6 +119,13 @@ try {
   for (const name of ['install.sh', 'comand-agent.tar.gz', 'comand-agent.tar.gz.sha256']) {
     if (!(await lstat(path.join(releaseDir, name))).isFile()) throw Error('Release files must be regular files');
   }
+  if (bootstrapNode) {
+    const probe = successful(await run('/bin/sh', ['-c', 'if command -v node >/dev/null 2>&1; then node -p \'process.versions.node.split(".")[0]\'; else printf "absent\\n"; fi'], 5000, bootstrapPath), 'Restricted PATH Node preflight');
+    const major = probe.stdout.trim();
+    if (major !== 'absent' && !/^\d+$/.test(major)) throw Error('Cannot establish the Node.js version on the restricted installer PATH');
+    if (major === '24') throw Error('Restricted installer PATH already contains Node.js 24; bootstrap coverage requires a host without system Node.js 24');
+    report.restrictedPathNode = major === 'absent' ? 'absent' : `major ${major}`;
+  }
   directory = await realpath(await mkdtemp(path.join(tmpdir(), 'comand-native-smoke-')));
   dataDir = path.join(directory, 'agent state with spaces');
   installDir = path.join(directory, 'program with spaces');
@@ -130,9 +141,16 @@ try {
   secrets.add(code);
   step = 'native-install';
   serviceAttempted = true;
-  const installation = await run('bash', [path.join(releaseDir, 'install.sh'), '--url', origin, '--code', code, '--name', 'Native service smoke', '--root', workspace, '--data-dir', dataDir, '--install-dir', installDir, '--allow-shell'], 45_000);
+  const installation = await run('bash', [path.join(releaseDir, 'install.sh'), '--url', origin, '--code', code, '--name', 'Native service smoke', '--root', workspace, '--data-dir', dataDir, '--install-dir', installDir, '--allow-shell'], bootstrapNode ? 85_000 : 45_000, bootstrapNode ? bootstrapPath : undefined);
   successful(installation, 'Native installer');
   await verifyNoCredentialsPrinted();
+  if (bootstrapNode) {
+    const runtime = await realpath(path.join(installDir, 'node'));
+    if (!runtime.startsWith(path.join(installDir, 'runtimes') + path.sep)) throw Error('Installer used a system runtime; no Node bootstrap was verified');
+    const runtimeVersion = successful(await run(path.join(installDir, 'node'), ['--version'], 5000), 'Downloaded Node version').stdout.trim();
+    if (runtimeVersion !== 'v24.22.1') throw Error('Downloaded runtime version is not Node.js 24.22.1');
+    Object.assign(report, { downloadedRuntime: true, downloadedNodeVersion: runtimeVersion });
+  }
   const config = JSON.parse(await readFile(path.join(dataDir, 'config.json'), 'utf8'));
   if (((await lstat(path.join(dataDir, 'config.json'))).mode & 0o777) !== 0o600) throw Error('Credential file permissions are not 0600');
   step = 'device-poll';

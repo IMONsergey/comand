@@ -1,6 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, Folder, Monitor, Plus, Shield, Terminal, Unplug } from 'lucide-react';
-import type { Device, Pairing } from '../../src/shared/protocol';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Check,
+  ChevronDown,
+  Folder,
+  LoaderCircle,
+  Monitor,
+  Plus,
+  Shield,
+  Terminal,
+  Unplug,
+} from 'lucide-react';
+import type { Device, Pairing, PairingStatus } from '../../src/shared/protocol';
 import { api, shellQuote } from './api';
 import {
   Busy,
@@ -69,7 +79,7 @@ export function Devices({
               </button>
             }
           >
-            Установите агент на Mac или Linux. Вы сами укажете папки и разрешённые операции.
+            Вставьте одну команду в Терминал на Mac или Linux. Остальное агент настроит сам.
           </Empty>
         </section>
       ) : (
@@ -167,236 +177,291 @@ export function Devices({
 }
 export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [pairing, setPairing] = useState<Pairing | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(true);
   const [name, setName] = useState('');
   const [root, setRoot] = useState('');
   const [stateDir, setStateDir] = useState('');
-  const [shell, setShell] = useState(false);
+  const [shell, setShell] = useState(true);
   const [browser, setBrowser] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const existing = useRef<string[]>([]);
-  const [connected, setConnected] = useState<Device | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState(false);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  async function create() {
+  const [device, setDevice] = useState<Device | null>(null);
+  const [retry, setRetry] = useState(0);
+  const mounted = useRef(false);
+  const started = useRef(false);
+  const generation = useRef(0);
+  const creating = useRef<AbortController | null>(null);
+  const create = useCallback(async () => {
+    const current = ++generation.current;
+    creating.current?.abort();
+    const controller = new AbortController();
+    creating.current = controller;
     setBusy(true);
-    setError(null);
+    setCreateError(null);
+    setPollError(null);
+    setPairing(null);
+    setDevice(null);
     try {
-      existing.current = (await api<Device[]>('/devices')).map((device) => device.id);
-      setPairing(await api<Pairing>('/pairings', { method: 'POST' }));
-      setConnected(null);
-      setChecked(false);
+      const value = await api<Pairing>('/pairings', { method: 'POST', signal: controller.signal });
+      if (mounted.current && current === generation.current) {
+        setPairing(value);
+        setNow(Date.now());
+      }
     } catch (cause) {
-      setError((cause as Error).message);
+      if (mounted.current && current === generation.current && !controller.signal.aborted)
+        setCreateError((cause as Error).message);
     } finally {
-      setBusy(false);
+      if (mounted.current && current === generation.current) setBusy(false);
     }
-  }
-  async function checkConnection() {
-    setChecking(true);
-    setError(null);
-    try {
-      const devices = await api<Device[]>('/devices');
-      const device = devices.find(
-        (item) =>
-          !existing.current.includes(item.id) && item.name === name.trim() && !item.revokedAt,
-      );
-      setConnected(device ?? null);
-      setChecked(true);
-    } catch (cause) {
-      setError((cause as Error).message);
-    } finally {
-      setChecking(false);
+  }, []);
+  useEffect(() => {
+    mounted.current = true;
+    // React StrictMode replays effects; retain the one in-flight pairing request.
+    if (!started.current) {
+      started.current = true;
+      void create();
     }
-  }
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      mounted.current = false;
+      clearInterval(clock);
+      queueMicrotask(() => {
+        if (!mounted.current) creating.current?.abort();
+      });
+    };
+  }, [create]);
+  useEffect(() => {
+    if (!pairing) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const current = generation.current;
+    async function poll() {
+      if (stopped) return;
+      if (!document.hidden) {
+        try {
+          const value = await api<PairingStatus>(`/pairings/${encodeURIComponent(pairing!.id)}`, {
+            signal: controller.signal,
+          });
+          if (stopped || current !== generation.current) return;
+          setDevice(value.device);
+          setPollError(null);
+          if (value.device?.online && !value.device.revokedAt) return;
+          if (!value.device && Date.now() >= new Date(value.expiresAt).getTime()) return;
+        } catch (cause) {
+          if (stopped || controller.signal.aborted || current !== generation.current) return;
+          setPollError((cause as Error).message);
+        }
+      }
+      if (!stopped) timer = setTimeout(() => void poll(), 2000);
+    }
+    void poll();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [pairing, retry]);
   const remaining = pairing
     ? Math.max(0, Math.ceil((new Date(pairing.expiresAt).getTime() - now) / 1000))
     : 0;
-  const validFields = name.trim() && root.startsWith('/') && stateDir.startsWith('/');
+  const rootError = root !== '' && !root.startsWith('/');
+  const stateError = stateDir !== '' && !stateDir.startsWith('/');
+  const validFields = !rootError && !stateError;
+  const connected = !!device?.online && !device.revokedAt;
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
   const command =
     pairing && validFields
-      ? `(comand_installer=$(mktemp) && curl -fsSL ${shellQuote(`${window.location.origin}/install.sh`)} -o "$comand_installer" && bash "$comand_installer" --url ${shellQuote(window.location.origin)} --code ${shellQuote(pairing.code)} --name ${shellQuote(name.trim())} --root ${shellQuote(root)} --data-dir ${shellQuote(stateDir)}${shell ? ' --allow-shell' : ''}${browser ? ' --allow-browser' : ''}; comand_status=$?; rm -f "$comand_installer"; exit "$comand_status")`
+      ? `(comand_installer=$(mktemp) &&\ncurl -fsSL ${shellQuote(`${window.location.origin}/install.sh`)} -o "$comand_installer" &&\nbash "$comand_installer" --url ${shellQuote(window.location.origin)} --code ${shellQuote(pairing.code)}${name.trim() ? ` --name ${shellQuote(name.trim())}` : ''}${root ? ` --root ${shellQuote(root)}` : ''}${stateDir ? ` --data-dir ${shellQuote(stateDir)}` : ''}${shell ? ' --allow-shell' : ''}${browser ? ' --allow-browser' : ''};\ncomand_status=$?; rm -f "$comand_installer"; exit "$comand_status")`
       : '';
   return (
     <Modal
       title="Подключить устройство"
-      subtitle="Установка одной командой. Mac и Linux, без Git и ручной сборки."
+      subtitle="Скопируйте команду и вставьте в Терминал на вашем Mac или Linux."
       onClose={onClose}
       wide
     >
-      <div className="pair-platforms">
-        <span>macOS · Intel / Apple Silicon</span>
-        <span>Linux · x64 / arm64</span>
-      </div>
-      <div className="setup-step">
-        <span className="step-number">1</span>
-        <div>
-          <h3>Задайте границы доступа</h3>
-          <p>
-            Укажите существующую папку на подключаемом компьютере. Файловые операции ограничены этой
-            папкой. Команды терминала имеют права вашего пользователя ОС.
-          </p>
-        </div>
-      </div>
-      <div className="form-grid">
-        <Field label="Название устройства">
-          <input
-            value={name}
-            disabled={!!pairing}
-            onChange={(event) => setName(event.target.value)}
-            maxLength={100}
-            placeholder="Например: Рабочий Mac"
-          />
-        </Field>
-        <Field label="Рабочая папка, абсолютный путь">
-          <input
-            className="mono"
-            value={root}
-            disabled={!!pairing}
-            onChange={(event) => setRoot(event.target.value)}
-            maxLength={4096}
-            placeholder="/Users/you/Projects"
-          />
-        </Field>
-      </div>
-      <Field
-        label="Папка состояния агента"
-        hint="Отдельная папка вне проектов. В ней хранятся ключ устройства и результаты задач."
-      >
-        <input
-          className="mono"
-          value={stateDir}
-          disabled={!!pairing}
-          onChange={(event) => setStateDir(event.target.value)}
-          placeholder="/Users/you/.comand-agent"
-          maxLength={4096}
-        />
-      </Field>
-      <div className="permission-options">
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            disabled={!!pairing}
-            checked={shell}
-            onChange={(event) => setShell(event.target.checked)}
-          />
-          <span>
-            Разрешить команды терминала
-            <small>Команды выполняются с правами пользователя устройства.</small>
-          </span>
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            disabled={!!pairing}
-            checked={browser}
-            onChange={(event) => setBrowser(event.target.checked)}
-          />
-          <span>
-            Разрешить проверку веб-страниц
-            <small>Нужен Chromium или Google Chrome на компьютере.</small>
-          </span>
-        </label>
-      </div>
-      <div className="setup-step">
-        <span className="step-number">2</span>
-        <div>
-          <h3>Скопируйте команду в терминал компьютера</h3>
-          <p>
-            Установщик загрузит агент, при необходимости Node.js 24 и включит автозапуск. Код
-            действует 10 минут и используется один раз.
-          </p>
-        </div>
-      </div>
-      <ErrorBox error={error} />
-      {!pairing ? (
-        <button
-          className="button button-primary"
-          onClick={() => void create()}
-          disabled={busy || !validFields}
-        >
-          {busy ? (
-            <Busy>Создаём код…</Busy>
-          ) : (
-            <>
-              Создать код подключения
-              <ArrowRight size={17} />
-            </>
-          )}
-        </button>
-      ) : (
-        <>
-          <div className="pairing-code">
-            <span className="eyebrow">ОДНОРАЗОВЫЙ КОД</span>
-            <strong className="mono">{pairing.code}</strong>
-            <span>
-              {remaining
-                ? `Действует ещё ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`
-                : 'Срок действия кода истёк'}
+      <div className="pair-connect">
+        {connected ? (
+          <div className="pair-success" role="status">
+            <span className="pair-success-icon">
+              <Check size={27} />
             </span>
+            <h3>Устройство подключено</h3>
+            <p>
+              <strong>{device.name}</strong> в сети и готово к работе.
+            </p>
+            <button className="button button-primary" onClick={onDone}>
+              Готово
+            </button>
           </div>
-          {command && remaining > 0 && !connected && (
-            <>
-              <div className="command-box">
-                <pre>{command}</pre>
-                <Copy value={command} label="Скопировать команду" />
+        ) : (
+          <>
+            <ErrorBox error={createError} onRetry={() => void create()} />
+            {busy && (
+              <div className="pair-loading">
+                <Busy>Готовим команду подключения…</Busy>
               </div>
-              <p className="muted small">
-                Дождитесь завершения установки, затем проверьте подключение ниже.
+            )}
+            {pairing && (
+              <>
+                {remaining > 0 && (
+                  <>
+                    <p className="pair-permission">
+                      <Shield size={18} />
+                      <span>
+                        {shell ? (
+                          <>
+                            Разрешает команды терминала с правами вашего пользователя и работу с
+                            файлами в <code>{root || '~/Comand'}</code>. Команды терминала не
+                            ограничены этой папкой.
+                          </>
+                        ) : (
+                          <>
+                            Разрешает файловые операции в <code>{root || '~/Comand'}</code>. Команды
+                            терминала выключены.
+                          </>
+                        )}
+                        {browser && ' Также разрешает просмотр веб-страниц.'}
+                      </span>
+                    </p>
+                    {validFields ? (
+                      <div className="pair-install-command">
+                        <div className="pair-command-label">
+                          <Terminal size={15} />
+                          <span>ВСТАВЬТЕ В ТЕРМИНАЛ</span>
+                        </div>
+                        <pre tabIndex={0} aria-label="Команда подключения">
+                          {command.split(shellQuote(pairing.code))[0]}
+                          <span className="pair-command-secret">{shellQuote(pairing.code)}</span>
+                          {command.split(shellQuote(pairing.code))[1]}
+                        </pre>
+                        <Copy value={command} label="Скопировать команду" />
+                      </div>
+                    ) : (
+                      <div className="notice warning" role="alert">
+                        Проверьте пути в дополнительных настройках. Нужен абсолютный путь,
+                        начинающийся с /, или оставьте поле пустым.
+                      </div>
+                    )}
+                    <p className="pair-defaults">
+                      {name || root
+                        ? 'Агент подключится с выбранными настройками и включит автозапуск.'
+                        : 'Имя компьютера определится автоматически. Агент создаст рабочую папку и настроит автозапуск.'}
+                    </p>
+                  </>
+                )}
+                {remaining === 0 && !device && (
+                  <div className="pair-expired">
+                    <h3>Срок действия команды истёк</h3>
+                    <p>Получите новую команду и вставьте её в Терминал.</p>
+                    <button className="button button-primary" onClick={() => void create()}>
+                      Получить новую команду
+                    </button>
+                  </div>
+                )}
+                {device?.revokedAt && (
+                  <ErrorBox error="Доступ к этому устройству отозван. Закройте окно и подключите его заново." />
+                )}
+                <ErrorBox error={pollError} onRetry={() => setRetry((value) => value + 1)} />
+                {!device?.revokedAt && (remaining > 0 || device) && (
+                  <div className="pair-waiting" role="status">
+                    <LoaderCircle size={18} className="spin" />
+                    <div>
+                      <strong>
+                        {device
+                          ? 'Устройство зарегистрировано. Ждём агента…'
+                          : 'Ожидаем подключения компьютера…'}
+                      </strong>
+                      <span>
+                        {pollError
+                          ? 'Проверка возобновится автоматически.'
+                          : 'Эта страница обновится сама.'}
+                      </span>
+                    </div>
+                    {remaining > 0 && (
+                      <small title="Срок действия одноразовой команды">
+                        {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, '0')}
+                      </small>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+            <details className="pair-advanced">
+              <summary>
+                Дополнительные настройки <ChevronDown size={16} />
+              </summary>
+              <div className="pair-advanced-body">
+                <p>Можно оставить всё как есть. Меняйте настройки до копирования команды.</p>
+                <Field label="Название устройства" hint="По умолчанию — имя компьютера.">
+                  <input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    maxLength={100}
+                    placeholder="Определится автоматически"
+                  />
+                </Field>
+                <Field
+                  label="Рабочая папка, абсолютный путь"
+                  hint="По умолчанию создаётся папка Comand в вашей домашней папке."
+                >
+                  <input
+                    className="mono"
+                    value={root}
+                    onChange={(event) => setRoot(event.target.value)}
+                    maxLength={4096}
+                    placeholder="~/Comand — по умолчанию"
+                    aria-invalid={rootError || undefined}
+                  />
+                </Field>
+                <Field
+                  label="Папка состояния агента"
+                  hint="Отдельная папка вне проектов. Оставьте пустым для автоматической настройки."
+                >
+                  <input
+                    className="mono"
+                    value={stateDir}
+                    onChange={(event) => setStateDir(event.target.value)}
+                    maxLength={4096}
+                    placeholder="Автоматически"
+                    aria-invalid={stateError || undefined}
+                  />
+                </Field>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={shell}
+                    onChange={(event) => setShell(event.target.checked)}
+                  />
+                  <span>
+                    Разрешить команды терминала
+                    <small>Команды выполняются с правами пользователя устройства.</small>
+                  </span>
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={browser}
+                    onChange={(event) => setBrowser(event.target.checked)}
+                  />
+                  <span>
+                    Разрешить проверку веб-страниц
+                    <small>Нужен Chromium или Google Chrome на компьютере.</small>
+                  </span>
+                </label>
+              </div>
+            </details>
+            {local && (
+              <p className="pair-local-note">
+                Этот адрес работает для подключения компьютера, на котором запущен Comand. Для
+                другого компьютера откройте публичный HTTPS-адрес сервера.
               </p>
-            </>
-          )}
-          {remaining === 0 && (
-            <button
-              className="button button-secondary"
-              onClick={() => void create()}
-              disabled={busy}
-            >
-              Создать новый код
-            </button>
-          )}
-          {connected ? (
-            <div className="pairing-status" role="status">
-              <Check size={16} /> <strong>{connected.name}</strong> —{' '}
-              {connected.online
-                ? 'в сети, можно создавать проект.'
-                : 'зарегистрирован. Агент ещё не вышел на связь.'}
-            </div>
-          ) : (
-            checked && (
-              <div className="pairing-status" role="status">
-                Новое устройство пока не появилось. Дождитесь завершения установки и проверьте ещё
-                раз. Если терминал показал ошибку, сохраните её текст.
-              </div>
-            )
-          )}
-          <div className="modal-actions">
-            <button
-              className="button button-primary"
-              disabled={checking}
-              onClick={() => (connected ? onDone() : void checkConnection())}
-            >
-              {checking ? (
-                <Busy>Проверяем…</Busy>
-              ) : (
-                <>
-                  <Check size={17} />
-                  {connected ? 'Готово' : 'Проверить подключение'}
-                </>
-              )}
-            </button>
-          </div>
-        </>
-      )}
-      <p className="modal-footnote">
-        Для другого компьютера адрес хаба должен быть доступен по сети. Loopback-адрес подходит
-        только для агента на этом же компьютере.
-      </p>
+            )}
+          </>
+        )}
+      </div>
     </Modal>
   );
 }

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 export const MAX_LOG_CHUNK = 64 * 1024;
 export const MAX_FILE_BYTES = 1024 * 1024;
 export const operationSchema = z.discriminatedUnion('kind', [
@@ -164,8 +164,13 @@ export interface LogChunk {
   hasMore: boolean;
 }
 export interface Pairing {
+  id: string;
   code: string;
   expiresAt: string;
+}
+export interface PairingStatus {
+  expiresAt: string;
+  device: Device | null;
 }
 export interface AgentEnrollment {
   pairingCode: string;

@@ -161,9 +161,30 @@ export function Modal({
         onCloseRef.current();
       }
       if (event.key === 'Tab') {
-        const items = ref.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
-        );
+        const items = Array.from(
+          ref.current?.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]',
+          ) ?? [],
+        ).filter((item) => {
+          if (!item.getClientRects().length || item.closest('[inert]')) return false;
+          const visibility = getComputedStyle(item).visibility;
+          if (visibility === 'hidden' || visibility === 'collapse') return false;
+          // Chromium can report layout boxes for controls in collapsed details.
+          // Only the direct summary (and its children) remains keyboard-accessible.
+          for (
+            let ancestor = item.parentElement;
+            ancestor && ancestor !== ref.current;
+            ancestor = ancestor.parentElement
+          ) {
+            if (ancestor.tagName === 'DETAILS' && !ancestor.hasAttribute('open')) {
+              const summary = Array.from(ancestor.children).find(
+                (child) => child.tagName === 'SUMMARY',
+              );
+              if (!summary?.contains(item)) return false;
+            }
+          }
+          return true;
+        });
         if (!items?.length) return;
         const first = items[0];
         const last = items[items.length - 1];

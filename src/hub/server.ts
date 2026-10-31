@@ -378,6 +378,9 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
     accounts.mapPairing(pairing.code, auth.principal(req)!, pairing.expiresAt);
     res.status(201).json(pairing);
   });
+  app.get('/api/pairings/:id', auth.requireOwner, (req, res) =>
+    res.json(requestStore(req).getPairingStatus(req.params.id as string)),
+  );
   app.post('/api/devices/:id/revoke', auth.requireOwner, (req, res) =>
     res.json(requestStore(req).revokeDevice(req.params.id as string)),
   );

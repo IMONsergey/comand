@@ -192,16 +192,26 @@ test('login, project, real command, file result, pairing and responsive navigati
   await page.getByRole('button', { name: 'Подключить устройство', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Название устройства', { exact: true }).fill('Второй компьютер');
-  await dialog.getByLabel('Рабочая папка, абсолютный путь', { exact: true }).fill(projectRoot);
-  await dialog
-    .getByLabel('Папка состояния агента', { exact: true })
-    .fill(join(directory, 'another agent'));
-  await dialog.getByRole('button', { name: 'Создать код подключения', exact: true }).click();
-  await expect(dialog.locator('.command-box pre')).toContainText('/install.sh');
-  await expect(dialog.locator('.command-box pre')).toContainText('bash "$comand_installer"');
-  await dialog.getByRole('button', { name: 'Проверить подключение', exact: true }).click();
-  await expect(dialog.getByRole('status')).toContainText('Новое устройство пока не появилось');
+  await expect(dialog.getByLabel('Команда подключения')).toContainText('/install.sh');
+  await expect(dialog.getByLabel('Команда подключения')).toContainText('--allow-shell');
+  await expect(dialog.getByLabel('Команда подключения')).not.toContainText('--root');
+  await expect(dialog.getByLabel('Команда подключения')).not.toContainText('--data-dir');
+  await expect(dialog.getByLabel('Команда подключения')).not.toContainText('--name');
+  await expect(dialog.getByLabel('Название устройства', { exact: true })).toBeHidden();
+  await expect(
+    dialog.getByRole('button', { name: 'Создать код подключения', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    dialog.getByRole('button', { name: 'Проверить подключение', exact: true }),
+  ).toHaveCount(0);
+  await expect(dialog.getByRole('status')).toContainText('Ожидаем подключения компьютера');
+  await expect(dialog.locator('.pair-permission')).toContainText('с правами вашего пользователя');
+  await page.screenshot({
+    path: testInfo.outputPath('pairing.png'),
+    fullPage: true,
+    animations: 'disabled',
+    mask: [dialog.locator('.pair-command-secret')],
+  });
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Подключение', exact: true }).click();
   await expect(page.getByText(`${url}/mcp`, { exact: true })).toBeVisible();
@@ -351,4 +361,132 @@ test('account signup, recovery acknowledgment, isolated empty workspace, passwor
     await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2),
   ).toBe(false);
   expect(errors).toEqual([]);
+});
+
+test('one-command pairing keeps its code, supports advanced settings and waits for the exact online agent', async ({
+  page,
+}, testInfo) => {
+  let createdCodes = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/pairings' && request.method() === 'POST')
+      createdCodes++;
+  });
+  await page.goto(url);
+  await page.getByText('Другой способ входа', { exact: true }).click();
+  await page.getByRole('button', { name: 'Войти по токену владельца' }).click();
+  await page.getByLabel('Токен владельца', { exact: true }).fill(token);
+  await page.getByRole('button', { name: 'Войти в Comand' }).click();
+  await page.getByRole('button', { name: 'Устройства', exact: true }).click();
+  let failedStatus = false;
+  await page.route('**/api/pairings/*', async (route) => {
+    if (!failedStatus) {
+      failedStatus = true;
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Временная ошибка проверки' }),
+      });
+    } else await route.continue();
+  });
+  const created = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/pairings' &&
+      response.request().method() === 'POST' &&
+      response.ok(),
+  );
+  await page.getByRole('button', { name: 'Подключить устройство', exact: true }).click();
+  const pairing = (await (await created).json()) as { id: string; code: string };
+  const dialog = page.getByRole('dialog');
+  const command = dialog.getByLabel('Команда подключения');
+  await expect(command).toContainText(pairing.code);
+  await expect(dialog.getByRole('alert')).toContainText('Временная ошибка проверки');
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  expect(createdCodes).toBe(1);
+  const advanced = dialog.locator('.pair-advanced summary');
+  await advanced.focus();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: 'Закрыть', exact: true })).toBeFocused();
+  await advanced.click();
+  await dialog.getByLabel('Название устройства', { exact: true }).fill("Studio ' Mac");
+  await dialog.getByLabel('Рабочая папка, абсолютный путь', { exact: true }).fill('relative/path');
+  await expect(dialog.getByRole('alert')).toContainText('Проверьте пути');
+  await expect(dialog.getByRole('button', { name: 'Скопировать команду' })).toHaveCount(0);
+  await dialog
+    .getByLabel('Рабочая папка, абсолютный путь', { exact: true })
+    .fill('/tmp/Comand workspace');
+  await dialog.getByLabel('Папка состояния агента', { exact: true }).fill('/tmp/Comand state');
+  await dialog.getByLabel('Разрешить команды терминала', { exact: false }).uncheck();
+  await dialog.getByLabel('Разрешить проверку веб-страниц', { exact: false }).check();
+  await expect(command).toContainText("--root '/tmp/Comand workspace'");
+  await expect(command).toContainText("--data-dir '/tmp/Comand state'");
+  await expect(command).toContainText('--name');
+  await expect(command).not.toContainText('--allow-shell');
+  await expect(command).toContainText('--allow-browser');
+  await expect(dialog.locator('.pair-permission')).toContainText('Команды терминала выключены');
+  await expect(command).toContainText(pairing.code);
+  expect(createdCodes).toBe(1);
+  await dialog.getByLabel('Название устройства', { exact: true }).fill('');
+  await dialog.getByLabel('Рабочая папка, абсолютный путь', { exact: true }).fill('');
+  await dialog.getByLabel('Папка состояния агента', { exact: true }).fill('');
+  await dialog.getByLabel('Разрешить команды терминала', { exact: false }).check();
+  await dialog.getByLabel('Разрешить проверку веб-страниц', { exact: false }).uncheck();
+  await advanced.click();
+  const otherController = new AbortController();
+  const exactController = new AbortController();
+  let otherRunner: Promise<void> | undefined;
+  let exactRunner: Promise<void> | undefined;
+  try {
+    const other = await pairDevice({
+      url,
+      code: hub.store.createPairing().code,
+      name: 'Unrelated pairing computer',
+      roots: [projectRoot],
+      allowShell: true,
+      allowBrowser: false,
+      dataDir: join(directory, 'unrelated-agent'),
+    });
+    other.pollMs = 100;
+    otherRunner = runAgent(other, { signal: otherController.signal });
+    await expect.poll(() => hub.store.getDevice(other.deviceId)?.online).toBe(true);
+    const unrelatedStatus = await page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/pairings/${pairing.id}` && response.ok(),
+    );
+    expect((await unrelatedStatus.json()).device).toBeNull();
+    await expect(
+      dialog.getByRole('heading', { name: 'Устройство подключено', exact: true }),
+    ).toHaveCount(0);
+    await expect(dialog.getByRole('status')).toContainText('Ожидаем подключения компьютера');
+    const exact = await pairDevice({
+      url,
+      code: pairing.code,
+      name: 'Exact pairing computer',
+      roots: [projectRoot],
+      allowShell: true,
+      allowBrowser: false,
+      dataDir: join(directory, 'exact-agent'),
+    });
+    await expect(dialog.getByRole('status')).toContainText('Устройство зарегистрировано');
+    await expect(
+      dialog.getByRole('heading', { name: 'Устройство подключено', exact: true }),
+    ).toHaveCount(0);
+    exact.pollMs = 100;
+    exactRunner = runAgent(exact, { signal: exactController.signal });
+    await expect(
+      dialog.getByRole('heading', { name: 'Устройство подключено', exact: true }),
+    ).toBeVisible();
+    await expect(dialog.getByRole('status')).toContainText('Exact pairing computer');
+    expect(createdCodes).toBe(1);
+    await page.screenshot({
+      path: testInfo.outputPath('pairing-connected.png'),
+      fullPage: true,
+      animations: 'disabled',
+    });
+    await dialog.getByRole('button', { name: 'Готово', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  } finally {
+    otherController.abort();
+    exactController.abort();
+    await Promise.all([otherRunner, exactRunner]);
+  }
 });
