@@ -181,6 +181,21 @@ export async function allowRoot(dataDir: string, root: string): Promise<string[]
     await unlink(lockPath);
   }
 }
+/** Explicit local migration; ordinary updates preserve the previous access policy. */
+export async function allowAllFiles(dataDir: string): Promise<string[]> {
+  const state = await realpath(dataDir);
+  const lockPath = path.join(state, 'configuration.lock');
+  const lock = await open(lockPath, 'wx', 0o600);
+  try {
+    const config = await loadConfig(state);
+    const roots = [path.parse(state).root];
+    await atomicJson(path.join(state, 'config.json'), { ...config, roots });
+    return roots;
+  } finally {
+    await lock.close();
+    await unlink(lockPath);
+  }
+}
 export async function acceptDispatch(config: AgentConfig, dispatch: Dispatch): Promise<boolean> {
   if (
     dispatch.job.deviceId !== config.deviceId ||

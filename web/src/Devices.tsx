@@ -115,10 +115,12 @@ export function Devices({
               </div>
               <div className="device-roots">
                 <span className="eyebrow">
-                  <Folder size={13} /> РАЗРЕШЁННЫЕ ПАПКИ
+                  <Folder size={13} /> ДОСТУП К ФАЙЛАМ
                 </span>
                 {device.roots.map((root) => (
-                  <code key={root}>{root}</code>
+                  <code key={root}>
+                    {root === '/' ? 'Все файлы, доступные пользователю ОС' : root}
+                  </code>
                 ))}
               </div>
               <div className="capabilities">
@@ -132,7 +134,11 @@ export function Devices({
               </div>
               <div className="device-card-footer">
                 <Shield size={14} />
-                <span>Файлы в разрешённых папках</span>
+                <span>
+                  {device.roots.includes('/')
+                    ? 'Права пользователя ОС'
+                    : 'Файлы в выбранных папках'}
+                </span>
                 {!device.revokedAt && (
                   <button
                     className="text-button danger-text"
@@ -311,19 +317,20 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
                     <p className="pair-permission">
                       <Shield size={18} />
                       <span>
-                        {shell ? (
+                        Доступ к{' '}
+                        {root && root !== '/' ? (
                           <>
-                            Разрешает команды терминала с правами вашего пользователя и работу с
-                            файлами в <code>{root || '~/Projects или ~/Comand'}</code>. Команды
-                            терминала не ограничены этой папкой.
+                            файлам в <code>{root}</code>
                           </>
                         ) : (
-                          <>
-                            Разрешает файловые операции в{' '}
-                            <code>{root || '~/Projects или ~/Comand'}</code>. Команды терминала
-                            выключены.
-                          </>
-                        )}
+                          'файлам компьютера'
+                        )}{' '}
+                        с правами вашего пользователя ОС.
+                        {shell ? ' Команды терминала разрешены.' : ' Команды терминала выключены.'}
+                        {root &&
+                          root !== '/' &&
+                          shell &&
+                          ' Команды терминала не ограничены этой папкой.'}
                         {browser && ' Также разрешает просмотр веб-страниц.'}
                       </span>
                     </p>
@@ -349,7 +356,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
                     <p className="pair-defaults">
                       {name || root
                         ? 'Агент подключится с выбранными настройками и включит автозапуск.'
-                        : 'Имя компьютера определится автоматически. Агент использует папку Projects; если её нет — создаст Comand. Существующие проекты сохраняются.'}
+                        : 'Имя компьютера определится автоматически. Опишите задачу в подключённом AI-чате — агент сам найдёт нужный проект.'}
                     </p>
                   </>
                 )}
@@ -405,21 +412,21 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
                   />
                 </Field>
                 <Field
-                  label="Рабочая папка, абсолютный путь"
-                  hint="По умолчанию используется существующая Projects; если её нет — Comand в домашней папке."
+                  label="Ограничить файловые операции папкой"
+                  hint="Необязательно. Пустое поле — доступ ко всем файлам с правами пользователя ОС. Терминал этим путём не ограничивается."
                 >
                   <input
                     className="mono"
                     value={root}
                     onChange={(event) => setRoot(event.target.value)}
                     maxLength={4096}
-                    placeholder="Автоматически: Projects или Comand"
+                    placeholder="Все доступные файлы"
                     aria-invalid={rootError || undefined}
                   />
                 </Field>
                 <Field
                   label="Папка состояния агента"
-                  hint="Отдельная папка вне проектов. Оставьте пустым для автоматической настройки."
+                  hint="Служебные данные. Оставьте пустым для автоматической настройки."
                 >
                   <input
                     className="mono"

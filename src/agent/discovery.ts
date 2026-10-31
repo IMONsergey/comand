@@ -1,5 +1,6 @@
 import { lstat, opendir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { homedir } from 'node:os';
 import type { Discovery, DiscoveryResult } from '../shared/discovery.js';
 
 const markers = new Set([
@@ -61,6 +62,13 @@ export async function discoverProjects(
       throw Error('Выберите исходную папку, а не символическую ссылку');
     starts = [selected];
   }
+  // Full access does not mean exhaustively walking the OS on every request.
+  // Start with the user's home, then let the agent narrow to observed paths anywhere.
+  if (!request.path && result.roots.includes('/')) {
+    starts = [await realpath(homedir())];
+    result.roots = starts;
+    result.truncated = true;
+  }
   const queue = starts.map((root) => ({ root, depth: 0 }));
   const seen = new Set<string>();
   const deadline = Date.now() + 4000;
@@ -102,7 +110,7 @@ export async function discoverProjects(
       const matches =
         !query ||
         name.toLocaleLowerCase().includes(query) ||
-        canonical.toLocaleLowerCase().includes(query);
+        (query.includes('/') && canonical.toLocaleLowerCase().includes(query));
       if (matches && (found.length || query))
         result.candidates.push({
           root: canonical,
@@ -111,7 +119,12 @@ export async function discoverProjects(
         });
       // Repositories may contain nested workspaces; inspect them too, within a fixed depth budget.
       if (item.depth < 4)
-        for (const root of children.sort()) queue.push({ root, depth: item.depth + 1 });
+        for (const root of children.sort(
+          (a, b) =>
+            Number(path.basename(b) === 'Projects') - Number(path.basename(a) === 'Projects') ||
+            a.localeCompare(b),
+        ))
+          queue.push({ root, depth: item.depth + 1 });
       else if (children.length) result.truncated = true;
     } catch {
       if (result.warnings.length < 32)

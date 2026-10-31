@@ -14,7 +14,8 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { MAX_FILE_BYTES, type Operation } from '../shared/protocol.js';
 export const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
-const within = (root: string, p: string) => p === root || p.startsWith(root + path.sep);
+const within = (root: string, p: string) =>
+  p === root || p.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
 export async function projectRoot(root: string, approved: string[]) {
   const actual = await realpath(root);
   const roots = await Promise.all(approved.map((r) => realpath(r)));

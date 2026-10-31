@@ -18,7 +18,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../src/mcp/tools.js';
 import { createHub } from '../src/hub/server.js';
-import { allowRoot, loadConfig, pairDevice, pollOnce } from '../src/agent/index.js';
+import { allowAllFiles, allowRoot, loadConfig, pairDevice, pollOnce } from '../src/agent/index.js';
+import { executeFileOperation, projectRoot } from '../src/agent/files.js';
+import { prepareProject } from '../src/mcp/prepare-project.js';
 import { discoverProjects } from '../src/agent/discovery.js';
 
 async function temporary(t: test.TestContext) {
@@ -242,4 +244,157 @@ test('adding an existing local root preserves device identity and rejects creden
   await writeFile(path.join(state, 'configuration.lock'), 'held');
   await assert.rejects(allowRoot(state, extra), /EEXIST/);
   assert.deepEqual(await loadConfig(state), { ...config, roots: [original, extra] });
+});
+
+test('explicit full-access migration preserves credentials and permits existing folders outside prior roots', async (t) => {
+  const base = await temporary(t),
+    state = path.join(base, 'agent'),
+    original = path.join(base, 'limited'),
+    other = path.join(base, 'other');
+  await Promise.all([mkdir(state), mkdir(original), mkdir(other)]);
+  const config = {
+    hubUrl: 'http://127.0.0.1:4310',
+    deviceId: 'unchanged',
+    token: randomBytes(32).toString('hex'),
+    roots: [original],
+    dataDir: state,
+    allowShell: true,
+    allowBrowser: false,
+  };
+  await writeFile(path.join(state, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+  await writeFile(path.join(other, 'README.md'), 'existing work');
+  await assert.rejects(projectRoot(other, config.roots), /outside approved/);
+  assert.deepEqual(await allowAllFiles(state), ['/']);
+  assert.deepEqual(await loadConfig(state), { ...config, roots: ['/'] });
+  const result = (await executeFileOperation(
+    { kind: 'files.read', path: 'README.md', offset: 0, limit: 1024 },
+    other,
+    ['/'],
+  )) as { content: string };
+  assert.equal(result.content, 'existing work');
+  const search = await discoverProjects({ query: 'other', path: base }, ['/']);
+  assert.equal(search.candidates[0]!.root, other);
+  await writeFile(path.join(state, 'configuration.lock'), 'held');
+  await assert.rejects(allowAllFiles(state), /EEXIST/);
+  assert.deepEqual(await loadConfig(state), { ...config, roots: ['/'] });
+});
+
+test('MCP prepares an existing project end to end without dashboard setup or filesystem creation', async (t) => {
+  const base = await temporary(t),
+    root = path.join(base, 'Projects'),
+    project = path.join(root, 'customer-site');
+  await mkdir(project, { recursive: true });
+  await writeFile(path.join(project, 'package.json'), '{"name":"customer-site"}');
+  const hub = await createHub({
+    dataDir: path.join(base, 'hub'),
+    adminToken: randomBytes(32).toString('hex'),
+    port: 0,
+  });
+  const url = await hub.start();
+  const config = await pairDevice({
+    url,
+    code: hub.store.createPairing().code,
+    name: 'work computer',
+    roots: [root],
+    dataDir: path.join(base, 'agent'),
+  });
+  await pollOnce(config);
+  const server = createMcpServer(hub.store),
+    client = new Client({ name: 'prepare-test', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(a);
+  await client.connect(b);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+    await hub.close();
+  });
+  const first = await client.callTool({
+    name: 'prepare_project',
+    arguments: { query: 'customer-site' },
+  });
+  assert.equal(first.isError, undefined);
+  assert.equal(first.structuredContent!.status, 'searching');
+  assert.equal(hub.store.listProjects().length, 0);
+  const searchIds = first.structuredContent!.searchIds as string[];
+  const pending = await client.callTool({
+    name: 'prepare_project',
+    arguments: { query: 'customer-site', searchIds },
+  });
+  assert.equal(pending.structuredContent!.status, 'searching');
+  await pollOnce(config);
+  const prepared = await client.callTool({
+    name: 'prepare_project',
+    arguments: { query: 'customer-site', searchIds },
+  });
+  assert.equal(prepared.isError, undefined);
+  assert.equal(prepared.structuredContent!.status, 'ready');
+  const record = prepared.structuredContent!.project as { id: string; root: string };
+  assert.equal(record.root, project);
+  const again = await prepareProject(hub.store, { query: 'customer-site' });
+  assert.equal(again.status, 'ready');
+  assert.equal('project' in again && again.project!.id, record.id);
+  assert.equal(hub.store.listProjects().length, 1);
+  assert.deepEqual(await readdir(root), ['customer-site']);
+  assert.deepEqual(await readdir(project), ['package.json']);
+  assert.equal(hub.store.listJobs().length, 0);
+  const wrong = await client.callTool({
+    name: 'prepare_project',
+    arguments: { query: 'other', searchIds },
+  });
+  assert.equal(wrong.isError, true);
+  // Similar registered copies must be investigated by the agent, not chosen arbitrarily.
+  hub.store.createProject({
+    deviceId: config.deviceId,
+    name: 'customer-site old',
+    root: path.join(root, 'old'),
+  });
+  assert.equal(
+    (await prepareProject(hub.store, { query: 'customer-site' })).status,
+    'inspect_candidates',
+  );
+  assert.equal((await prepareProject(hub.store, { projectId: record.id })).status, 'ready');
+});
+
+test('project preparation does not mistake an incomplete search or offline device for absence', async (t) => {
+  const base = await temporary(t);
+  const hub = await createHub({
+    dataDir: base,
+    adminToken: randomBytes(32).toString('hex'),
+    port: 0,
+  });
+  t.after(() => hub.close());
+  const device = hub.store.enroll({
+    pairingCode: hub.store.createPairing().code,
+    name: 'device',
+    platform: 'linux',
+    roots: ['/'],
+    allowShell: true,
+    allowBrowser: false,
+    version: '0.4.0',
+  });
+  hub.store.poll(device.deviceId, { projectDiscovery: true });
+  const first = await prepareProject(hub.store, { query: 'site' });
+  assert.equal(first.status, 'searching');
+  const searchIds = 'searchIds' in first ? first.searchIds! : [];
+  hub.store.completeDiscovery(device.deviceId, searchIds[0]!, {
+    result: { roots: ['/home/user'], candidates: [], visited: 3, truncated: true, warnings: [] },
+  });
+  assert.equal(
+    (await prepareProject(hub.store, { query: 'site', searchIds })).status,
+    'incomplete',
+  );
+  assert.equal(hub.store.listProjects().length, 0);
+  const server = createMcpServer(hub.store, ['comand:read']),
+    client = new Client({ name: 'read-only-prepare', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(a);
+  await client.connect(b);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  const denied = await client.callTool({ name: 'prepare_project', arguments: { query: 'site' } });
+  assert.equal(denied.isError, true);
+  assert.equal(hub.store.listProjects().length, 0);
 });

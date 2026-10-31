@@ -320,7 +320,7 @@ export function App() {
                         overview.projects.length
                           ? setNewJob(true)
                           : overview.devices.length
-                            ? setPage('projects')
+                            ? setPage('connection')
                             : setPair(true)
                       }
                     >
@@ -328,7 +328,7 @@ export function App() {
                       {overview.projects.length
                         ? 'Новая задача'
                         : overview.devices.length
-                          ? 'Найти проект'
+                          ? 'Подключить AI-чат'
                           : 'Подключить устройство'}
                     </button>
                   </div>
@@ -348,38 +348,29 @@ export function App() {
                             {overview.devices.length ? <Check size={16} /> : '01'}
                           </span>
                           <strong>Подключите компьютер</strong>
-                          <p>Установите агент на Mac или Linux и разрешите доступ.</p>
+                          <p>Вставьте одну команду в Терминал на Mac или Linux.</p>
                           <span className="onboarding-action">
                             {overview.devices.length ? 'Подключить ещё' : 'Установить агент'}{' '}
                             <ArrowUpRight size={15} />
                           </span>
                         </button>
                         <button
-                          className={
-                            overview.projects.length
-                              ? 'complete'
-                              : overview.devices.length
-                                ? 'current'
-                                : ''
-                          }
-                          onClick={() => setPage('projects')}
+                          className={overview.devices.length ? 'current' : ''}
+                          onClick={() => setPage('connection')}
                         >
-                          <span className="onboarding-number">
-                            {overview.projects.length ? <Check size={16} /> : '02'}
-                          </span>
-                          <strong>Выберите проект</strong>
-                          <p>Укажите рабочую папку и сохраните контекст проекта.</p>
+                          <span className="onboarding-number">02</span>
+                          <strong>Подключите AI-чат</strong>
+                          <p>Один раз добавьте Comand в ChatGPT или другой MCP-клиент.</p>
                           <span className="onboarding-action">
-                            {overview.projects.length ? 'Открыть проекты' : 'Найти проект'}{' '}
-                            <ArrowUpRight size={15} />
+                            Настроить подключение <ArrowUpRight size={15} />
                           </span>
                         </button>
                         <button onClick={() => setPage('connection')}>
                           <span className="onboarding-number">03</span>
-                          <strong>Подключите AI-чат</strong>
-                          <p>Добавьте Comand в ChatGPT или другой MCP-клиент.</p>
+                          <strong>Опишите задачу</strong>
+                          <p>Агент сам найдёт проект, выполнит работу и проверит результат.</p>
                           <span className="onboarding-action">
-                            Настроить MCP <ArrowUpRight size={15} />
+                            Как начать работу <ArrowUpRight size={15} />
                           </span>
                         </button>
                       </div>
@@ -474,20 +465,20 @@ export function App() {
                                   onClick={() =>
                                     overview.projects.length
                                       ? setNewJob(true)
-                                      : setPage(overview.devices.length ? 'projects' : 'devices')
+                                      : setPage(overview.devices.length ? 'connection' : 'devices')
                                   }
                                 >
                                   {overview.projects.length
                                     ? 'Создать первую задачу'
                                     : overview.devices.length
-                                      ? 'Найти проект'
+                                      ? 'Подключить AI-чат'
                                       : 'Подключить устройство'}
                                   <ArrowRight size={16} />
                                 </button>
                               }
                             >
-                              Подключите устройство, укажите рабочую папку проекта и отправьте
-                              первую операцию.
+                              Опишите задачу в подключённом AI-чате. Агент найдёт проект, выполнит
+                              работу и проверит результат.
                             </Empty>
                           )}
                         </section>

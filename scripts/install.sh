@@ -13,7 +13,8 @@ bash install.sh --url https://comand.example --code CODE [--allow-shell] [--allo
   [--profile PROFILE] [--data-dir /absolute/state] [--install-dir /absolute/program] [--no-service]
 bash install.sh --update --url https://comand.example [--data-dir /absolute/state]
   [--profile PROFILE] [--install-dir /absolute/program] [--no-service]
-Имя компьютера определяется автоматически. Используется существующая ~/Projects; если её нет — ~/Comand.
+По умолчанию доступны файлы компьютера с правами пользователя ОС. --root ограничивает файловые операции.
+Имя компьютера определяется автоматически. Папки проектов не создаются.
 Существующие учётные данные сохраняются. Обновление не требует нового кода.
 HELP
 }
@@ -30,8 +31,6 @@ custom_data=0
 custom_install=0
 update=0
 no_service=0
-default_root=0
-default_workspace="$HOME/Comand"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
@@ -55,9 +54,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$update" -eq 0 ] && [ "${#roots[@]}" -eq 0 ]; then
-  if [ -e "$HOME/Projects" ] || [ -L "$HOME/Projects" ]; then default_workspace="$HOME/Projects"; fi
-  roots=("$default_workspace")
-  default_root=1
+  roots=("/")
 fi
 
 # Accept an origin only; credentials, paths, queries and fragments cannot reach curl.
@@ -90,14 +87,7 @@ else
   [ ! -e "$data_dir/config.json" ] && [ ! -L "$data_dir/config.json" ] || fail "Этот агент уже подключён. Его ключ сохранён. Проверьте раздел «Устройства». Для обновления замените --code и разрешения на --update, сохранив --url, --profile и выбранные пути. Состояние: $data_dir"
 fi
 for directory in "${roots[@]}"; do
-  if [ "$default_root" -eq 1 ]; then
-    [ ! -L "$directory" ] || fail "Рабочая папка $default_workspace не должна быть символической ссылкой. Выберите другую рабочую папку через --root."
-    if [ -e "$directory" ]; then
-      [ -d "$directory" ] && [ -O "$directory" ] || fail "Рабочая папка $default_workspace должна принадлежать текущему пользователю."
-    fi
-  else
-    [ -d "$directory" ] || fail 'Рабочая папка не существует. Создайте её и повторите установку.'
-  fi
+  [ -d "$directory" ] || fail 'Рабочая папка не существует. Укажите существующую папку.'
 done
 for executable in curl tar gzip mktemp shasum; do
   command -v "$executable" >/dev/null 2>&1 || {
@@ -194,10 +184,10 @@ fi
 node_exec=$("$node_exec" -p 'require("node:fs").realpathSync(process.execPath)')
 
 # Resolve paths once and reject overlapping runtime/state before downloading code.
-"$node_exec" - "$install_dir" "$data_dir" "$hub_url" "$update" "$default_root" "$default_workspace" <<'VALIDATE'
+"$node_exec" - "$install_dir" "$data_dir" "$hub_url" "$update" <<'VALIDATE'
 const fs = require('node:fs');
 const path = require('node:path');
-const [install, data, rawUrl, update, defaultRoot, defaultWorkspace] = process.argv.slice(2);
+const [install, data, rawUrl, update] = process.argv.slice(2);
 const a = fs.realpathSync(install), b = fs.realpathSync(data), url = new URL(rawUrl);
 if (a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)) throw Error('Папки программы и состояния должны быть раздельными.');
 if (url.origin !== rawUrl) throw Error('Нужен нормализованный origin сервера.');
@@ -205,16 +195,7 @@ if (update === '1') {
   const config = JSON.parse(fs.readFileSync(path.join(b, 'config.json'), 'utf8'));
   if (config.hubUrl.replace(/\/$/, '') !== rawUrl) throw Error('Обновляйте агент с адреса его существующего сервера.');
 } else if (fs.existsSync(path.join(b, 'config.json'))) throw Error('Агент уже подключён; ключ не изменён.');
-if (defaultRoot === '1') {
-  const workspace = path.join(fs.realpathSync(path.dirname(defaultWorkspace)), path.basename(defaultWorkspace));
-  for (const directory of [a, b]) {
-    if (workspace === directory || workspace.startsWith(directory + path.sep) || directory.startsWith(workspace + path.sep)) throw Error('Рабочая папка по умолчанию должна быть отделена от программы и состояния.');
-  }
-  try { fs.mkdirSync(workspace, { mode: 0o700 }); }
-  catch (error) { if (error.code !== 'EEXIST') throw error; }
-  const stat = fs.lstatSync(workspace);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('Рабочая папка по умолчанию должна быть обычной папкой текущего пользователя.');
-}
+
 VALIDATE
 if [ "$update" -eq 0 ] && [ -z "$device_name" ]; then
   device_name=$("$node_exec" -p 'const name = require("node:os").hostname().replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim(); ((name && !name.startsWith("--")) ? name : "Comand computer").slice(0, 100)')
@@ -273,9 +254,6 @@ else
 fi
 if [ "$update" -eq 0 ]; then
   [ ! -e "$data_dir/config.json" ] && [ ! -L "$data_dir/config.json" ] || fail 'Агент уже подключён; ключ не изменён.'
-  if [ "$default_root" -eq 1 ]; then
-    [ ! -L "$default_workspace" ] && [ -d "$default_workspace" ] && [ -O "$default_workspace" ] || fail "Рабочая папка $default_workspace изменилась во время установки. Проверьте её и повторите подключение."
-  fi
   pair_args=(pair --url "$hub_url" --code "$pair_code" --name "$device_name" --data-dir "$data_dir")
   for directory in "${roots[@]}"; do pair_args+=(--root "$directory"); done
   "$node_exec" "$release_dir/dist/agent/cli.js" "${pair_args[@]}" "${capabilities[@]}"

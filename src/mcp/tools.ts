@@ -6,6 +6,7 @@ import type { HubStore } from '../hub/store.js';
 import { VERSION, type Job, type Operation } from '../shared/protocol.js';
 import { SCOPES } from './oauth-provider.js';
 import { AGENT_INSTRUCTIONS } from './instructions.js';
+import { prepareProject, prepareProjectSchema } from './prepare-project.js';
 import { discoveryInputSchema } from '../shared/discovery.js';
 
 type Awaitable<T> = T | Promise<T>;
@@ -122,6 +123,22 @@ export function createMcpServer(backend: ComandBackend, scopes: string[] = SCOPE
     backend.createJob({ projectId, operation, idempotencyKey: key ?? `read-${randomUUID()}` });
   const meta = (scope: string) => ({ securitySchemes: [{ type: 'oauth2', scopes: [scope] }] });
 
+  server.registerTool(
+    'prepare_project',
+    {
+      description:
+        'Start here for project work. Infer query or ongoing projectId from the user task. Automatically reuse a registered project or search connected devices and open a unique discovered project. Continue pending searches with returned searchIds. Resolve candidate context yourself; never require the user to add/select a project in the dashboard. No file creation or command execution.',
+      inputSchema: prepareProjectSchema.shape,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      _meta: meta('comand:write'),
+    },
+    (input) => run('comand:write', () => prepareProject(backend, input)),
+  );
   server.registerTool(
     'list_devices',
     {

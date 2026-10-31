@@ -280,7 +280,7 @@ test(
 );
 
 test(
-  'minimal installer command creates only the default workspace, uses hostname and preserves existing pairing',
+  'minimal installer grants filesystem access without creating a workspace and preserves pairing',
   { timeout: 30_000 },
   async (t) => {
     const f = await fixture(t);
@@ -300,14 +300,14 @@ test(
     assert.ok(passed[passed.indexOf('--name') + 1]!.length <= 100);
     assert.doesNotMatch(passed[passed.indexOf('--name') + 1]!, /[\x00-\x1f\x7f-\x9f]/);
     assert.equal(passed.filter((value) => value === '--root').length, 1);
-    assert.equal(passed[passed.indexOf('--root') + 1], workspace);
+    assert.equal(passed[passed.indexOf('--root') + 1], '/');
+    await assert.rejects(stat(workspace), /ENOENT/);
     assert.ok(!passed.includes(home), 'the home directory is not an approved root');
     assert.ok(passed.includes('--allow-shell'));
-    for (const directory of [workspace, state, program])
+    for (const directory of [state, program])
       assert.equal((await stat(directory)).mode & 0o777, 0o700);
     assert.equal((await stat(path.join(state, 'config.json'))).mode & 0o777, 0o600);
     const beforeRepeat = f.requests.length;
-    await rm(workspace, { recursive: true });
     const repeated = await command([installer, ...args], env);
     assert.notEqual(repeated.code, 0);
     assert.match(repeated.stderr, /уже подключён/);
@@ -332,34 +332,23 @@ test(
   },
 );
 
-test(
-  'default workspace rejects symlinks and missing custom roots are never created',
-  { timeout: 15_000 },
-  async (t) => {
-    const f = await fixture(t);
-    const home = path.join(f.directory, 'isolated-home');
-    await mkdir(home);
-    await writeFile(path.join(home, 'sentinel'), 'untouched');
-    await symlink(home, path.join(home, 'Comand'));
-    const env = { ...f.env, HOME: home };
-    const args = ['--url', f.origin, '--code', 'single-use-fixture-secret', '--allow-shell'];
-    const symlinked = await command([installer, ...args], env);
-    assert.notEqual(symlinked.code, 0);
-    assert.match(symlinked.stderr, /не должна быть символической ссылкой/);
-    assert.equal(f.requests.length, 0);
-    assert.equal(await readFile(path.join(home, 'sentinel'), 'utf8'), 'untouched');
-    await unlink(path.join(home, 'Comand'));
-    const custom = path.join(home, 'custom-missing');
-    const missing = await command([installer, ...args, '--root', custom], env);
-    assert.notEqual(missing.code, 0);
-    assert.match(missing.stderr, /Рабочая папка не существует/);
-    assert.equal(f.requests.length, 0);
-    for (const directory of [custom, path.join(home, 'Comand'), path.join(home, '.comand')])
-      await assert.rejects(stat(directory), /ENOENT/);
-  },
-);
+test('missing custom roots are never created', { timeout: 15_000 }, async (t) => {
+  const f = await fixture(t);
+  const home = path.join(f.directory, 'isolated-home');
+  await mkdir(home);
+  await writeFile(path.join(home, 'sentinel'), 'untouched');
+  const env = { ...f.env, HOME: home };
+  const args = ['--url', f.origin, '--code', 'single-use-fixture-secret', '--allow-shell'];
+  const custom = path.join(home, 'custom-missing');
+  const missing = await command([installer, ...args, '--root', custom], env);
+  assert.notEqual(missing.code, 0);
+  assert.match(missing.stderr, /Рабочая папка не существует/);
+  assert.equal(f.requests.length, 0);
+  for (const directory of [custom, path.join(home, 'Comand'), path.join(home, '.comand')])
+    await assert.rejects(stat(directory), /ENOENT/);
+});
 
-test('installer reuses an existing Projects directory without creating an empty Comand workspace', async (t) => {
+test('full-access installer preserves existing projects without creating an empty workspace', async (t) => {
   const f = await fixture(t);
   const home = path.join(f.directory, 'existing home'),
     projects = path.join(home, 'Projects');
@@ -373,7 +362,7 @@ test('installer reuses an existing Projects directory without creating an empty 
   const config = JSON.parse(
     await readFile(path.join(home, '.comand', 'agent', 'config.json'), 'utf8'),
   );
-  assert.equal(config.arguments[config.arguments.indexOf('--root') + 1], projects);
+  assert.equal(config.arguments[config.arguments.indexOf('--root') + 1], '/');
   await assert.rejects(stat(path.join(home, 'Comand')), /ENOENT/);
   assert.equal(
     await readFile(path.join(projects, 'actual-site', 'index.html'), 'utf8'),

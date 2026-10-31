@@ -303,6 +303,8 @@ test('account signup, recovery acknowledgment, isolated empty workspace, passwor
   await page.getByRole('button', { name: 'Перейти в рабочую среду' }).click();
   await expect(page.getByRole('heading', { name: 'Начнём с подключения.' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Первые шаги' })).toBeVisible();
+  await expect(page.getByText('Выберите проект', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Опишите задачу', { exact: true })).toBeVisible();
   await expect(page.getByText('UI test computer', { exact: true })).toHaveCount(0);
   await page.screenshot({
     path: testInfo.outputPath('onboarding.png'),
@@ -402,6 +404,8 @@ test('one-command pairing keeps its code, supports advanced settings and waits f
   await expect(command).toContainText(pairing.code);
   await expect(dialog.getByRole('alert')).toContainText('Временная ошибка проверки');
   await expect(dialog.getByRole('alert')).toHaveCount(0);
+  await expect(dialog.locator('.pair-permission')).toContainText('файлам компьютера');
+  await expect(command).not.toContainText('--root');
   expect(createdCodes).toBe(1);
   const advanced = dialog.locator('.pair-advanced summary');
   await advanced.focus();
@@ -409,11 +413,13 @@ test('one-command pairing keeps its code, supports advanced settings and waits f
   await expect(dialog.getByRole('button', { name: 'Закрыть', exact: true })).toBeFocused();
   await advanced.click();
   await dialog.getByLabel('Название устройства', { exact: true }).fill("Studio ' Mac");
-  await dialog.getByLabel('Рабочая папка, абсолютный путь', { exact: true }).fill('relative/path');
+  await dialog
+    .getByLabel('Ограничить файловые операции папкой', { exact: true })
+    .fill('relative/path');
   await expect(dialog.getByRole('alert')).toContainText('Проверьте пути');
   await expect(dialog.getByRole('button', { name: 'Скопировать команду' })).toHaveCount(0);
   await dialog
-    .getByLabel('Рабочая папка, абсолютный путь', { exact: true })
+    .getByLabel('Ограничить файловые операции папкой', { exact: true })
     .fill('/tmp/Comand workspace');
   await dialog.getByLabel('Папка состояния агента', { exact: true }).fill('/tmp/Comand state');
   await dialog.getByLabel('Разрешить команды терминала', { exact: false }).uncheck();
@@ -427,7 +433,7 @@ test('one-command pairing keeps its code, supports advanced settings and waits f
   await expect(command).toContainText(pairing.code);
   expect(createdCodes).toBe(1);
   await dialog.getByLabel('Название устройства', { exact: true }).fill('');
-  await dialog.getByLabel('Рабочая папка, абсолютный путь', { exact: true }).fill('');
+  await dialog.getByLabel('Ограничить файловые операции папкой', { exact: true }).fill('');
   await dialog.getByLabel('Папка состояния агента', { exact: true }).fill('');
   await dialog.getByLabel('Разрешить команды терминала', { exact: false }).check();
   await dialog.getByLabel('Разрешить проверку веб-страниц', { exact: false }).uncheck();

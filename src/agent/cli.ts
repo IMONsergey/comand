@@ -12,6 +12,7 @@ import {
   loadConfig,
   syncJobs,
   allowRoot,
+  allowAllFiles,
 } from './index.js';
 export async function agentCli(args = process.argv.slice(2)) {
   const [command, ...rest] = args;
@@ -19,7 +20,7 @@ export async function agentCli(args = process.argv.slice(2)) {
   const booleans = new Set<string>();
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i]!;
-    if (['--allow-shell', '--allow-browser', '--acknowledge'].includes(key)) {
+    if (['--allow-shell', '--allow-browser', '--acknowledge', '--all-files'].includes(key)) {
       booleans.add(key);
       continue;
     }
@@ -53,6 +54,12 @@ export async function agentCli(args = process.argv.slice(2)) {
       console.log(
         'Shell enabled: trusted hub owners can execute commands with this account’s permissions.',
       );
+  } else if (command === 'access' && booleans.has('--all-files')) {
+    if (values.has('--root')) throw Error('Use --all-files without --root');
+    console.log(JSON.stringify({ roots: await allowAllFiles(dataDir) }));
+    console.log(
+      'Доступны файлы с правами пользователя ОС. Перезапустите службу агента. Ключ и история сохранены.',
+    );
   } else if (command === 'allow-root') {
     console.log(JSON.stringify({ roots: await allowRoot(dataDir, required('--root')) }));
     console.log(
@@ -77,7 +84,7 @@ export async function agentCli(args = process.argv.slice(2)) {
     await syncJobs(await loadConfig(dataDir));
   } else
     console.log(
-      'Usage: comand-agent pair --url URL --code CODE --name NAME --root PATH [--root PATH] [--allow-shell] [--allow-browser] [--data-dir PATH]\n       comand-agent allow-root --root PATH [--data-dir PATH]\n       comand-agent run|status [--data-dir PATH]\n       comand-agent resolve --job ID --acknowledge [--data-dir PATH]',
+      'Usage: comand-agent pair --url URL --code CODE --name NAME --root PATH [--root PATH] [--allow-shell] [--allow-browser] [--data-dir PATH]\n       comand-agent access --all-files [--data-dir PATH]\n       comand-agent allow-root --root PATH [--data-dir PATH]\n       comand-agent run|status [--data-dir PATH]\n       comand-agent resolve --job ID --acknowledge [--data-dir PATH]',
     );
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1]))
