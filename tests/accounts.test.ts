@@ -878,6 +878,9 @@ test('pairing status follows the exact enrolled device through heartbeat and res
   assert.match(first.id, /^[a-f0-9-]{36}$/);
   assert.notEqual(first.id, first.code);
   assert.notEqual(first.id, second.id);
+  assert.match(first.installationProfile!, /^[a-f0-9]{64}$/);
+  assert.equal(first.installationProfile, second.installationProfile);
+  assert.notEqual(first.installationProfile, other.installationProfile);
   const status = (pair: Pairing, session = a) =>
     f.request(`/api/pairings/${pair.id}`, undefined, session);
   assert.deepEqual(await (await status(first)).json(), {

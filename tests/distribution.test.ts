@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, utimes, readlink, unlink, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, utimes, readlink, unlink, stat, realpath } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -245,6 +245,46 @@ test('default workspace rejects symlinks and missing custom roots are never crea
   assert.match(missing.stderr, /Рабочая папка не существует/);
   assert.equal(f.requests.length, 0);
   for (const directory of [custom, path.join(home, 'Comand'), path.join(home, '.comand')]) await assert.rejects(stat(directory), /ENOENT/);
+});
+
+test('account profiles install beside legacy agents and keep servers, identities and updates separate', { timeout: 30_000 }, async (t) => {
+  const f = await fixture(t);
+  const home = path.join(f.directory, 'profile home');
+  const legacy = path.join(home, '.comand', 'agent', 'config.json');
+  await mkdir(path.dirname(legacy), { recursive: true });
+  const legacyConfig = JSON.stringify({ hubUrl: 'http://127.0.0.1:4310', token: 'legacy-fixture' });
+  await writeFile(legacy, legacyConfig);
+  const env = { ...f.env, HOME: home };
+  const firstProfile = 'a'.repeat(64), secondProfile = 'b'.repeat(64);
+  const location = (profile: string, origin = f.origin) => {
+    const id = createHash('sha256').update(`${origin}\n${profile}`).digest('hex');
+    return { state: path.join(home, '.comand', 'connections', id), program: path.join(home, '.local', 'share', 'comand-connections', id) };
+  };
+  for (const [profile, origin] of [[firstProfile, f.origin], [secondProfile, f.origin], [firstProfile, f.origin.replace('127.0.0.1', 'localhost')]]) {
+    const result = await command([installer, '--url', origin!, '--profile', profile!, '--code', 'fixture-code', '--allow-shell'], env);
+    assert.equal(result.code, 0, result.stderr + result.stdout);
+    const target = location(profile!, origin);
+    const config = JSON.parse(await readFile(path.join(target.state, 'config.json'), 'utf8'));
+    assert.equal(config.hubUrl, origin);
+    assert.ok((await readlink(path.join(target.program, 'current'))).startsWith(await realpath(target.program)));
+    assert.equal(await readFile(legacy, 'utf8'), legacyConfig);
+  }
+  const target = location(firstProfile);
+  const original = await readFile(path.join(target.state, 'config.json'));
+  const repeated = await command([installer, '--url', f.origin, '--profile', firstProfile, '--code', 'new-code'], env);
+  assert.notEqual(repeated.code, 0);
+  assert.match(repeated.stderr, /уже подключён/);
+  const updated = await command([installer, '--url', f.origin, '--profile', firstProfile, '--update'], env);
+  assert.equal(updated.code, 0, updated.stderr + updated.stdout);
+  assert.deepEqual(await readFile(path.join(target.state, 'config.json')), original);
+  assert.equal(await readFile(legacy, 'utf8'), legacyConfig);
+  const invalid = await command([installer, '--url', f.origin, '--profile', '../../agent', '--code', 'fixture-code'], env);
+  assert.notEqual(invalid.code, 0);
+  assert.match(invalid.stderr, /Некорректный профиль/);
+  // Explicit paths never silently redirect away from an existing identity.
+  const explicit = await command([installer, '--url', f.origin, '--profile', firstProfile, '--code', 'fixture-code', '--data-dir', path.dirname(legacy)], env);
+  assert.notEqual(explicit.code, 0);
+  assert.equal(await readFile(legacy, 'utf8'), legacyConfig);
 });
 
 test('checksum or traversal failure leaves credentials absent and does not publish a current release', { timeout: 30_000 }, async (t) => {

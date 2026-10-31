@@ -376,7 +376,10 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
   app.post('/api/pairings', auth.requireOwner, (req, res) => {
     const pairing = requestStore(req).createPairing();
     accounts.mapPairing(pairing.code, auth.principal(req)!, pairing.expiresAt);
-    res.status(201).json(pairing);
+    res.status(201).json({
+      ...pairing,
+      installationProfile: hashToken(`comand-installation:${auth.principal(req)!}`),
+    });
   });
   app.get('/api/pairings/:id', auth.requireOwner, (req, res) =>
     res.json(requestStore(req).getPairingStatus(req.params.id as string)),

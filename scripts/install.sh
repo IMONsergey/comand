@@ -10,9 +10,9 @@ usage() {
 Comand — установка агента без Git, npm и sudo.
 bash install.sh --url https://comand.example --code CODE [--allow-shell] [--allow-browser]
   [--name NAME] [--root /absolute/project] [--root /another/project]
-  [--data-dir /absolute/state] [--install-dir /absolute/program] [--no-service]
+  [--profile PROFILE] [--data-dir /absolute/state] [--install-dir /absolute/program] [--no-service]
 bash install.sh --update --url https://comand.example [--data-dir /absolute/state]
-  [--install-dir /absolute/program] [--no-service]
+  [--profile PROFILE] [--install-dir /absolute/program] [--no-service]
 Имя компьютера определяется автоматически. Рабочая папка по умолчанию: ~/Comand.
 Существующие учётные данные сохраняются. Обновление не требует нового кода.
 HELP
@@ -25,6 +25,9 @@ roots=()
 capabilities=()
 data_dir="${HOME:?HOME is required}/.comand/agent"
 install_dir="$HOME/.local/share/comand"
+profile=''
+custom_data=0
+custom_install=0
 update=0
 no_service=0
 default_root=0
@@ -34,15 +37,16 @@ while [ "$#" -gt 0 ]; do
     --update) update=1; shift ;;
     --no-service) no_service=1; shift ;;
     --allow-shell|--allow-browser) capabilities+=("$1"); shift ;;
-    --url|--code|--name|--root|--data-dir|--install-dir)
+    --url|--code|--name|--root|--profile|--data-dir|--install-dir)
       [ "$#" -ge 2 ] && [ -n "$2" ] && [[ "$2" != --* ]] || fail 'У параметра отсутствует значение.'
       case "$1" in
         --url) hub_url="$2" ;;
         --code) pair_code="$2" ;;
         --name) device_name="$2" ;;
         --root) roots+=("$2") ;;
-        --data-dir) data_dir="$2" ;;
-        --install-dir) install_dir="$2" ;;
+        --profile) profile="$2" ;;
+        --data-dir) data_dir="$2"; custom_data=1 ;;
+        --install-dir) install_dir="$2"; custom_install=1 ;;
       esac
       shift 2 ;;
     *) fail 'Неизвестный параметр. Используйте --help.' ;;
@@ -59,6 +63,18 @@ https_origin='^https://([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\
 loopback_origin='^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?/?$'
 [[ "$hub_url" =~ $https_origin || "$hub_url" =~ $loopback_origin ]] || fail 'Нужен HTTPS-адрес сервера без пути. HTTP допустим только для loopback.'
 hub_url="${hub_url%/}"
+# The web command supplies a stable account profile. Combine it with the origin
+# so another hub/account cannot replace the legacy agent or share its release link.
+if [ -n "$profile" ]; then
+  [[ "$profile" =~ ^[a-f0-9]{64}$ ]] || fail 'Некорректный профиль подключения. Скопируйте новую команду из панели.'
+  if command -v sha256sum >/dev/null 2>&1; then
+    connection=$(printf '%s\n%s' "$hub_url" "$profile" | sha256sum | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    connection=$(printf '%s\n%s' "$hub_url" "$profile" | shasum -a 256 | awk '{print $1}')
+  else fail 'Не найдена программа shasum или sha256sum.'; fi
+  [ "$custom_data" -eq 1 ] || data_dir="$HOME/.comand/connections/$connection"
+  [ "$custom_install" -eq 1 ] || install_dir="$HOME/.local/share/comand-connections/$connection"
+fi
 for directory in "$install_dir" "$data_dir" "${roots[@]}"; do
   [[ "$directory" == /* && "$directory" != *$'\n'* && "$directory" != *$'\r'* ]] || fail 'Папки должны иметь абсолютные пути без переводов строк.'
 done
@@ -69,7 +85,7 @@ if [ "$update" -eq 1 ]; then
   [ -f "$data_dir/config.json" ] && [ ! -L "$data_dir/config.json" ] || fail 'Для обновления нужна существующая конфигурация агента.'
 else
   [ -n "$pair_code" ] || fail 'Для подключения нужен --code.'
-  [ ! -e "$data_dir/config.json" ] && [ ! -L "$data_dir/config.json" ] || fail 'Этот агент уже подключён. Используйте --update или другую --data-dir; ключ не изменён.'
+  [ ! -e "$data_dir/config.json" ] && [ ! -L "$data_dir/config.json" ] || fail "Этот агент уже подключён. Его ключ сохранён. Проверьте раздел «Устройства». Для обновления замените --code и разрешения на --update, сохранив --url, --profile и выбранные пути. Состояние: $data_dir"
 fi
 for directory in "${roots[@]}"; do
   if [ "$default_root" -eq 1 ]; then
@@ -295,6 +311,7 @@ if [ "$no_service" -eq 0 ]; then
 fi
 committed=1
 printf '\nComand %s установлен. Данные агента: %s\n' "$version" "$data_dir"
+printf 'Программа: %s\n' "$install_dir"
 printf 'Состояние: '; printf '%q ' "$install_dir/bin/comand" agent status --data-dir "$data_dir"; printf '\n'
 if [ "$no_service" -eq 1 ]; then
   printf 'Ручной запуск: '; printf '%q ' "$install_dir/bin/comand" agent run --data-dir "$data_dir"; printf '\n'

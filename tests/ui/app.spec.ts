@@ -194,6 +194,7 @@ test('login, project, real command, file result, pairing and responsive navigati
   dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('Команда подключения')).toContainText('/install.sh');
   await expect(dialog.getByLabel('Команда подключения')).toContainText('--allow-shell');
+  await expect(dialog.getByLabel('Команда подключения')).toContainText(/--profile '[a-f0-9]{64}'/);
   await expect(dialog.getByLabel('Команда подключения')).not.toContainText('--root');
   await expect(dialog.getByLabel('Команда подключения')).not.toContainText('--data-dir');
   await expect(dialog.getByLabel('Команда подключения')).not.toContainText('--name');

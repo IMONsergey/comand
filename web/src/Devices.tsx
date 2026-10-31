@@ -273,7 +273,7 @@ export function PairDevice({ onClose, onDone }: { onClose: () => void; onDone: (
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
   const command =
     pairing && validFields
-      ? `(comand_installer=$(mktemp) &&\ncurl -fsSL ${shellQuote(`${window.location.origin}/install.sh`)} -o "$comand_installer" &&\nbash "$comand_installer" --url ${shellQuote(window.location.origin)} --code ${shellQuote(pairing.code)}${name.trim() ? ` --name ${shellQuote(name.trim())}` : ''}${root ? ` --root ${shellQuote(root)}` : ''}${stateDir ? ` --data-dir ${shellQuote(stateDir)}` : ''}${shell ? ' --allow-shell' : ''}${browser ? ' --allow-browser' : ''};\ncomand_status=$?; rm -f "$comand_installer"; exit "$comand_status")`
+      ? `(comand_installer=$(mktemp) &&\ncurl -fsSL ${shellQuote(`${window.location.origin}/install.sh`)} -o "$comand_installer" &&\nbash "$comand_installer" --url ${shellQuote(window.location.origin)} --code ${shellQuote(pairing.code)}${pairing.installationProfile ? ` --profile ${shellQuote(pairing.installationProfile)}` : ''}${name.trim() ? ` --name ${shellQuote(name.trim())}` : ''}${root ? ` --root ${shellQuote(root)}` : ''}${stateDir ? ` --data-dir ${shellQuote(stateDir)}` : ''}${shell ? ' --allow-shell' : ''}${browser ? ' --allow-browser' : ''};\ncomand_status=$?; rm -f "$comand_installer"; exit "$comand_status")`
       : '';
   return (
     <Modal
