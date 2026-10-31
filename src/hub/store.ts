@@ -57,6 +57,17 @@ const enrollmentSchema = z
     version: z.string().min(1).max(100),
   })
   .strict();
+const heartbeatSchema = z
+  .object({
+    version: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .refine((value) => !/[\x00-\x1f\x7f]/.test(value))
+      .optional(),
+  })
+  .strict();
 const updateSchema = z
   .object({
     jobId: z.string().max(100),
@@ -466,10 +477,12 @@ export class HubStore {
       return job;
     });
   }
-  poll(deviceId: string): PollResponse {
+  poll(deviceId: string, heartbeat: unknown = {}): PollResponse {
+    const value = parse(heartbeatSchema, heartbeat);
     return this.transaction(() => {
       const device = this.requiredDevice(deviceId);
       device.lastSeenAt = now();
+      if (value.version !== undefined) device.version = value.version;
       this.db.prepare('UPDATE devices SET data=? WHERE id=?').run(JSON.stringify(device), deviceId);
       const jobs = this.db
         .prepare(

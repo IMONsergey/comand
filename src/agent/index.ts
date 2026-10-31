@@ -375,7 +375,7 @@ export async function syncJobs(config: AgentConfig) {
 }
 export async function pollOnce(config: AgentConfig) {
   await reconcileJobs(config);
-  const response = await request<PollResponse>(config, '/api/agent/poll', {});
+  const response = await request<PollResponse>(config, '/api/agent/poll', { version: VERSION });
   const errors: Error[] = [];
   for (const id of response.cancellations) await cancelLocalJob(config.dataDir, id).catch(() => {});
   for (const dispatch of response.jobs) {

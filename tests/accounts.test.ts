@@ -787,3 +787,81 @@ test('process stdin is absent from job summaries and overview while dispatch and
     'Summary redaction must not alter the deduplicated job',
   );
 });
+
+test('version heartbeats refresh only the authenticated device, validate before mutation and preserve legacy polling', async (t) => {
+  const { VERSION } = await import('../src/shared/protocol.js');
+  const { pollOnce } = await import('../src/agent/index.js');
+  const f = await fixture(t);
+  const account = await f.register('heartbeat@example.com');
+  const otherAccount = await f.register('other-heartbeat@example.com');
+  const { credentials: device } = await f.enroll(account);
+  const { credentials: sibling } = await f.enroll(account);
+  const { credentials: foreign } = await f.enroll(otherAccount);
+  const deviceState = () => f.hub.storeFor(account.user!.id).getDevice(device.deviceId)!;
+  assert.equal(deviceState().version, '0.1.0');
+  assert.equal((await f.request('/api/agent/poll', {}, device.token)).status, 200);
+  assert.equal(
+    deviceState().version,
+    '0.1.0',
+    'An old agent heartbeat must retain its recorded version',
+  );
+  assert.ok(deviceState().lastSeenAt);
+
+  await pollOnce({
+    hubUrl: f.url,
+    ...device,
+    name: 'Heartbeat',
+    roots: ['/work'],
+    allowShell: true,
+    allowBrowser: false,
+    dataDir: join(f.dataDir, 'heartbeat-agent'),
+    pollMs: 1000,
+    maxConcurrent: 1,
+  });
+  assert.equal(deviceState().version, VERSION, 'The real agent must report its running version');
+  assert.equal((await f.request('/api/agent/poll', {}, device.token)).status, 200);
+  assert.equal(deviceState().version, VERSION, 'Omitted version must not erase the last report');
+  const snapshot = deviceState();
+  for (const body of [
+    { version: 42 },
+    { version: null },
+    { version: {} },
+    { version: [] },
+    { version: '' },
+    { version: '   ' },
+    { version: 'x'.repeat(101) },
+    { version: '0.2\n.0' },
+    [],
+  ]) {
+    assert.equal((await f.request('/api/agent/poll', body, device.token)).status, 400);
+    assert.deepEqual(
+      deviceState(),
+      snapshot,
+      'Invalid reports must not update heartbeat or version',
+    );
+  }
+  for (const deviceId of [sibling.deviceId, foreign.deviceId]) {
+    assert.equal(
+      (await f.request('/api/agent/poll', { deviceId, version: '9.9.9' }, device.token)).status,
+      400,
+    );
+  }
+  assert.equal(f.hub.storeFor(account.user!.id).getDevice(sibling.deviceId)?.version, '0.1.0');
+  assert.equal(f.hub.storeFor(otherAccount.user!.id).getDevice(foreign.deviceId)?.version, '0.1.0');
+  assert.equal(
+    (await f.request('/api/agent/poll', { version: '9.9.9' }, 'invalid-device-token')).status,
+    401,
+  );
+  assert.deepEqual(deviceState(), snapshot);
+  await f.restart();
+  assert.equal(deviceState().version, VERSION, 'Version must survive hub restart');
+  assert.equal(
+    (await f.request(`/api/devices/${device.deviceId}/revoke`, {}, account)).status,
+    200,
+  );
+  assert.equal(
+    (await f.request('/api/agent/poll', { version: '9.9.9' }, device.token)).status,
+    401,
+  );
+  assert.equal(deviceState().version, VERSION, 'Revoked credentials cannot update device metadata');
+});

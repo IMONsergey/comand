@@ -334,8 +334,8 @@ export async function createHub(options: HubOptions): Promise<HubRuntime> {
     res.locals.deviceStore = deviceStore;
     next();
   };
-  app.post('/api/agent/poll', requireDevice, (_req, res) =>
-    res.json((res.locals.deviceStore as HubStore).poll(res.locals.deviceId as string)),
+  app.post('/api/agent/poll', requireDevice, (req, res) =>
+    res.json((res.locals.deviceStore as HubStore).poll(res.locals.deviceId as string, req.body)),
   );
   app.post('/api/agent/jobs/:id/update', requireDevice, (req, res) => {
     if (req.body?.jobId && req.body.jobId !== req.params.id)
