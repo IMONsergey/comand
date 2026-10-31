@@ -373,6 +373,10 @@ test('project preparation does not mistake an incomplete search or offline devic
     allowBrowser: false,
     version: '0.4.0',
   });
+  const unavailable = await prepareProject(hub.store, { query: 'site' });
+  assert.equal(unavailable.status, 'unavailable');
+  assert.match(unavailable.next, /No search was started/);
+  assert.deepEqual('searchIds' in unavailable && unavailable.searchIds, []);
   hub.store.poll(device.deviceId, { projectDiscovery: true });
   const first = await prepareProject(hub.store, { query: 'site' });
   assert.equal(first.status, 'searching');

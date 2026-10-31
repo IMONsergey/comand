@@ -91,7 +91,9 @@ export async function prepareProject(
       searchIds: searches,
       blocked,
       errors,
-      next: 'Call prepare_project again with the same query, deviceId and returned searchIds. Do not send the user to search manually.',
+      next: searches.length
+        ? 'Call prepare_project again with the same query, deviceId and returned searchIds. Do not send the user to search manually.'
+        : 'No search was started. Diagnose the reported connection, agent capability or active-search errors before another attempt. Do not poll an empty search list or ask the user to configure a project.',
     };
   }
   const searches = await Promise.all(input.searchIds.map((id) => backend.getDiscovery(id)));
